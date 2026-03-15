@@ -194,8 +194,9 @@ CURRENCY_FLAGS = {
 # ══════════════════════════════════════════════
 def get_sptoday_rates() -> list:
     """
-    Scrape live exchange rates from sp-today.com/currencies.
-    Returns list of (code, ar_name, buy, sell, change) tuples.
+    Fetch live exchange rates from sp-today API.
+    Returns list of dicts with keys: code, name_ar, flag, buy, sell,
+    change_day, change_week, change_month, day_high, day_low.
     """
     try:
         headers = {
@@ -203,33 +204,37 @@ def get_sptoday_rates() -> list:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/120.0.0.0 Safari/537.36"
-            )
+            ),
+            "Accept": "application/json",
+            "Origin": "https://sp-today.com",
+            "Referer": "https://sp-today.com/currencies",
         }
         resp = requests.get(
-            "https://sp-today.com/currencies", headers=headers, timeout=10
+            "https://api-v2.sp-today.com/api/v1/overview?lang=ar&city=damascus",
+            headers=headers, timeout=10
         )
-        soup = BeautifulSoup(resp.text, "html.parser")
-        table = soup.find("table")
-        if not table:
-            logger.warning("sp-today: could not find rates table in HTML")
-            return []
+        payload = resp.json()
+        raw_rates = payload["data"]["rates"]
 
         result = []
-        for row in table.find_all("tr")[1:]:   # skip <thead>
-            cols = row.find_all("td")
-            if len(cols) < 4:
+        for item in raw_rates:
+            city = item.get("cities", {}).get("damascus", {})
+            if not city:
                 continue
-            # col[0]: link text like "USD\nUSDدولار أمريكي"
-            raw = cols[0].get_text("\n", strip=True)
-            parts = [p.strip() for p in raw.split("\n") if p.strip()]
-            code    = parts[0] if parts else "???"
-            ar_name = parts[1].replace(code, "").strip() if len(parts) > 1 else code
-            buy     = cols[1].get_text(strip=True)
-            sell    = cols[2].get_text(strip=True)
-            change  = cols[3].get_text(strip=True)
-            result.append((code, ar_name, buy, sell, change))
+            result.append({
+                "code":         item.get("code", "???"),
+                "name_ar":      item.get("name_ar", item.get("name", "")),
+                "flag":         item.get("flag", "💵"),
+                "buy":          city.get("buy", 0),
+                "sell":         city.get("sell", 0),
+                "change_day":   city.get("change", 0),
+                "change_week":  city.get("change_week", 0),
+                "change_month": city.get("change_month", 0),
+                "day_high":     city.get("day_high", 0),
+                "day_low":      city.get("day_low", 0),
+            })
 
-        logger.info("sp-today: fetched %d currency rates", len(result))
+        logger.info("sp-today API: fetched %d currency rates", len(result))
         return result
 
     except Exception as exc:
@@ -237,8 +242,19 @@ def get_sptoday_rates() -> list:
         return []
 
 
+def _fmt_change(val: float, label_ar: str, label_en: str, lang: str) -> str:
+    """Format a change percentage value with arrow, color indicator and label."""
+    label = label_ar if lang == "ar" else label_en
+    if val > 0:
+        return f"📈 <b>{label}:</b> <i>+{val:.2f}%</i>"
+    elif val < 0:
+        return f"📉 <b>{label}:</b> <i>{val:.2f}%</i>"
+    else:
+        return f"➖ <b>{label}:</b> <i>0.00%</i>"
+
+
 def format_rates_message(rates: list, lang: str) -> str:
-    """Format the scraped rates into a beautifully spaced Telegram HTML message."""
+    """Format the API rates into a clean Telegram HTML message."""
     if not rates:
         return (
             "⚠️ تعذّر تحميل الأسعار حالياً. حاول مرة أخرى لاحقاً."
@@ -248,36 +264,45 @@ def format_rates_message(rates: list, lang: str) -> str:
 
     now = datetime.now().strftime("%H:%M")
     if lang == "ar":
-        title  = f"💹 <b>أسعار الصرف مقابل الليرة السورية</b>\n🕐 آخر تحديث: {now}"
-        buy_l  = "شراء"
-        sell_l = "بيع"
+        title    = f"💹 <b>أسعار الصرف مقابل الليرة السورية</b>\n🕐 آخر تحديث: {now}"
+        buy_l    = "شراء"
+        sell_l   = "بيع"
+        high_l   = "أعلى"
+        low_l    = "أدنى"
     else:
-        title  = f"💹 <b>Exchange Rates vs Syrian Pound (SYP)</b>\n🕐 Last updated: {now}"
-        buy_l  = "Buy"
-        sell_l = "Sell"
+        title    = f"💹 <b>Exchange Rates vs Syrian Pound (SYP)</b>\n🕐 Last updated: {now}"
+        buy_l    = "Buy"
+        sell_l   = "Sell"
+        high_l   = "High"
+        low_l    = "Low"
 
     lines = [title, ""]
 
-    for code, ar_name, buy, sell, change in rates:
-        flag = CURRENCY_FLAGS.get(code, "💵")
+    for r in rates:
+        flag         = r["flag"]
+        code         = r["code"]
+        name_display = r["name_ar"] if lang == "ar" else code
+        buy          = f"{r['buy']:,}"
+        sell         = f"{r['sell']:,}"
+        high         = f"{r['day_high']:,}"
+        low          = f"{r['day_low']:,}"
+        chg_day      = r["change_day"]
+        chg_week     = r["change_week"]
+        chg_month    = r["change_month"]
 
-        if "▲" in change or "+" in change:
-            chg_icon = "📈"
-            chg_val  = change.replace("▲","").replace("+","").strip()
-            chg_str  = f"{chg_icon} <i>+{chg_val}</i>"
-        elif "▼" in change or "-" in change:
-            chg_icon = "📉"
-            chg_val  = change.replace("▼","").replace("-","").strip()
-            chg_str  = f"{chg_icon} <i>-{chg_val}</i>"
+        # Day change icon for header
+        if chg_day > 0:
+            day_badge = f"📈 +{chg_day:.2f}%"
+        elif chg_day < 0:
+            day_badge = f"📉 {chg_day:.2f}%"
         else:
-            chg_str = "➖"
+            day_badge = "➖ 0.00%"
 
-        name_display = ar_name if lang == "ar" else code
-
-        lines.append(f"┌ {flag} <b>{code}</b>  —  {name_display}")
-        lines.append(f"│  📥 <b>{buy_l}:</b>  {buy}")
-        lines.append(f"│  📤 <b>{sell_l}:</b> {sell}")
-        lines.append(f"└  {chg_str}")
+        lines.append(f"┌ {flag} <b>{code}</b>  {name_display}  {day_badge}")
+        lines.append(f"│  💰 <b>{buy_l}:</b>  <code>{buy}</code>   <b>{sell_l}:</b>  <code>{sell}</code>")
+        lines.append(f"│  📊 <b>{high_l}:</b> <code>{high}</code>   <b>{low_l}:</b> <code>{low}</code>")
+        lines.append(f"│  {_fmt_change(chg_week,  'أسبوعي', 'Week',  lang)}")
+        lines.append(f"└  {_fmt_change(chg_month, 'شهري',   'Month', lang)}")
         lines.append("")   # blank line between currencies
 
     source = (
