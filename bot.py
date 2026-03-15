@@ -953,11 +953,15 @@ signal.signal(signal.SIGINT,  _handle_signal)
 # ══════════════════════════════════════════════
 #  ENTRY POINT
 # ══════════════════════════════════════════════
+async def on_startup(dispatcher):
+    await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("✅ Bot is running!")
+
 if __name__ == "__main__":
     init_db()
     logger.info("Transfer Bot v3.0 starting…")
     executor.start_polling(
         dp,
         skip_updates=True,
-        on_startup=lambda _: logger.info("✅ Bot is running!"),
+        on_startup=on_startup,
     )
