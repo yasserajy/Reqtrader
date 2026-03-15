@@ -445,15 +445,15 @@ def save_trade(data: dict, user: types.User) -> tuple:
 def get_stats() -> dict:
     with sqlite3.connect("market.db") as conn:
         total     = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
-        send_cnt  = conn.execute("SELECT COUNT(*) FROM trades WHERE type='send'").fetchone()[0]
-        recv_cnt  = conn.execute("SELECT COUNT(*) FROM trades WHERE type='receive'").fetchone()[0]
+        buy_cnt   = conn.execute("SELECT COUNT(*) FROM trades WHERE type='buy'").fetchone()[0]
+        sell_cnt  = conn.execute("SELECT COUNT(*) FROM trades WHERE type='sell'").fetchone()[0]
         pending   = conn.execute("SELECT COUNT(*) FROM trades WHERE status='PENDING'").fetchone()[0]
         completed = conn.execute("SELECT COUNT(*) FROM trades WHERE status='COMPLETED'").fetchone()[0]
         volumes   = conn.execute(
             "SELECT asset, SUM(amount) FROM trades GROUP BY asset"
         ).fetchall()
     return {
-        "total": total, "send": send_cnt, "receive": recv_cnt,
+        "total": total, "buy": buy_cnt, "sell": sell_cnt,
         "pending": pending, "completed": completed, "volumes": volumes,
     }
 
@@ -524,10 +524,10 @@ TX = {
             "<i>Select your language to begin 👇</i>"
         ),
         "select_type"     : "📋 <b>اختر نوع العملية:</b>",
-        "btn_send"        : "📤 إرسال",
-        "btn_receive"     : "📥 استقبال",
-        "select_asset_s"  : "💱 <b>اختر العملة التي تريد إرسالها:</b>",
-        "select_asset_r"  : "💱 <b>اختر العملة التي تريد استقبالها:</b>",
+        "btn_buy"         : "🛒 شراء",
+        "btn_sell"        : "💸 بيع",
+        "select_asset_b"  : "💱 <b>اختر العملة التي تريد شراءها:</b>",
+        "select_asset_sl" : "💱 <b>اختر العملة التي تريد بيعها:</b>",
         "enter_amount"    : "💵 <b>أدخل المبلغ:</b>\n\nأو اختر مبلغًا سريعًا 👇",
         "custom_amount"   : "أو اكتب مبلغًا مخصصًا 👇",
         "select_pay_cur"  : "🌍 <b>اختر عملة الدفع:</b>",
@@ -572,10 +572,10 @@ TX = {
             "Select your language to begin 👇"
         ),
         "select_type"     : "📋 <b>Select operation type:</b>",
-        "btn_send"        : "📤 Send",
-        "btn_receive"     : "📥 Receive",
-        "select_asset_s"  : "💱 <b>Select currency to send:</b>",
-        "select_asset_r"  : "💱 <b>Select currency to receive:</b>",
+        "btn_buy"         : "🛒 Buy",
+        "btn_sell"        : "💸 Sell",
+        "select_asset_b"  : "💱 <b>Select currency to buy:</b>",
+        "select_asset_sl" : "💱 <b>Select currency to sell:</b>",
         "enter_amount"    : "💵 <b>Enter the amount:</b>\n\nOr pick a quick amount 👇",
         "custom_amount"   : "Or type a custom amount 👇",
         "select_pay_cur"  : "🌍 <b>Select payment currency:</b>",
@@ -629,8 +629,8 @@ def lang_kb() -> InlineKeyboardMarkup:
 def type_kb(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton(t(lang, "btn_send"),    callback_data="type_send"),
-        InlineKeyboardButton(t(lang, "btn_receive"), callback_data="type_receive"),
+        InlineKeyboardButton(t(lang, "btn_buy"),  callback_data="type_buy"),
+        InlineKeyboardButton(t(lang, "btn_sell"), callback_data="type_sell"),
     )
     kb.add(
         InlineKeyboardButton(t(lang, "btn_rates"), callback_data="show_rates"),
@@ -707,11 +707,10 @@ async def show_welcome(target, edit: bool = False) -> None:
 # ══════════════════════════════════════════════
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-PERSISTENT_KB = ReplyKeyboardMarkup(resize_keyboard=True, row_width=4).add(
+PERSISTENT_KB = ReplyKeyboardMarkup(resize_keyboard=True, row_width=3).add(
     KeyboardButton("🏠 القائمة / Menu"),
     KeyboardButton("💹 الأسعار / Rates"),
     KeyboardButton("🥇 الذهب / Gold"),
-    KeyboardButton("ℹ️ عن البوت / About"),
 )
 
 @dp.message_handler(commands=["start"], state="*")
@@ -775,7 +774,7 @@ async def cmd_help(message: types.Message, state: FSMContext):
                 "❓ <b>المساعدة</b>\n\n"
                 "🏠 /start — القائمة الرئيسية\n"
                 "💹 /rates — أسعار الصرف الحية\n"
-                "ℹ️ /about — معلومات عن البوت\n"
+
                 "📊 /stats — إحصائيات (للمشرف)\n"
                 "⚙️ /admin — لوحة التحكم (للمشرف)\n\n"
                 "للبدء اضغط /start"
@@ -785,7 +784,7 @@ async def cmd_help(message: types.Message, state: FSMContext):
                 "❓ <b>Help</b>\n\n"
                 "🏠 /start — Main Menu\n"
                 "💹 /rates — Live Exchange Rates\n"
-                "ℹ️ /about — About this bot\n"
+
                 "📊 /stats — Statistics (Admin)\n"
                 "⚙️ /admin — Admin Panel (Admin)\n\n"
                 "Press /start to begin"
@@ -809,21 +808,6 @@ async def kb_gold(message: types.Message, state: FSMContext):
 async def kb_rates(message: types.Message, state: FSMContext):
     await cmd_rates(message, state)
 
-@dp.message_handler(lambda m: m.text in ["ℹ️ عن البوت / About"], state="*")
-async def kb_about(message: types.Message, state: FSMContext):
-    await cmd_about(message, state)
-
-# ══════════════════════════════════════════════
-#  ── /about ──
-# ══════════════════════════════════════════════
-@dp.message_handler(commands=["about"], state="*")
-async def cmd_about(message: types.Message, state: FSMContext):
-    try:
-        data = await state.get_data()
-        lang = data.get("language", "en")
-        await message.answer(t(lang, "about"))
-    except Exception as exc:
-        logger.error("cmd_about: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── /stats  (admin only) ──
@@ -842,8 +826,8 @@ async def cmd_stats(message: types.Message):
             "📊 <b>إحصائيات / Trade Statistics</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📋 الإجمالي / Total  : <b>{s['total']}</b>\n"
-            f"  ├ 📤 إرسال / Send  : <b>{s['send']}</b>\n"
-            f"  └ 📥 استقبال / Rec : <b>{s['receive']}</b>\n\n"
+            f"  ├ 🛒 شراء / Buy    : <b>{s['buy']}</b>\n"
+            f"  └ 💸 بيع / Sell    : <b>{s['sell']}</b>\n\n"
             f"🔄 الحالة / Status\n"
             f"  ├ ⏳ Pending        : <b>{s['pending']}</b>\n"
             f"  └ ✅ Completed      : <b>{s['completed']}</b>\n\n"
@@ -899,7 +883,7 @@ async def cb_language(callback: types.CallbackQuery, state: FSMContext):
         logger.error("cb_language: %s", exc)
 
 # ══════════════════════════════════════════════
-#  ── TYPE  (Send / Receive) ──
+#  ── TYPE  (Buy / Sell) ──
 # ══════════════════════════════════════════════
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=MarketFlow.type)
 async def cb_type(callback: types.CallbackQuery, state: FSMContext):
@@ -909,7 +893,11 @@ async def cb_type(callback: types.CallbackQuery, state: FSMContext):
         trade_type = callback.data.split("_", 1)[1]
         await state.update_data(type=trade_type)
 
-        asset_key = "select_asset_s" if trade_type == "send" else "select_asset_r"
+        asset_key_map = {
+            "buy":  "select_asset_b",
+            "sell": "select_asset_sl",
+        }
+        asset_key = asset_key_map.get(trade_type, "select_asset_b")
         await callback.message.edit_text(t(lang, asset_key), reply_markup=asset_kb(lang))
         await MarketFlow.asset.set()
     except Exception as exc:
@@ -1172,7 +1160,7 @@ async def cb_show_rates(callback: types.CallbackQuery, state: FSMContext):
 # ══════════════════════════════════════════════
 #  ── BACK TO START ──
 # ══════════════════════════════════════════════
-@dp.callback_query_handler(lambda c: c.data == "go_start", state="*")
+@dp.callback_query_handler(lambda c: c.data in ("go_start", "back_to_main"), state="*")
 async def cb_go_start(callback: types.CallbackQuery, state: FSMContext):
     try:
         await state.finish()
@@ -1219,7 +1207,7 @@ async def on_startup(dispatcher):
         BotCommand("gold",    "🥇 أسعار الذهب / Gold Prices"),
         BotCommand("stats",   "📊 الإحصائيات / Statistics (Admin)"),
         BotCommand("admin",   "⚙️ لوحة التحكم / Admin Panel"),
-        BotCommand("about",   "ℹ️ عن البوت / About"),
+
         BotCommand("help",    "❓ المساعدة / Help"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
