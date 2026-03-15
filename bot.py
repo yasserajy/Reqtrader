@@ -238,7 +238,7 @@ def get_sptoday_rates() -> list:
 
 
 def format_rates_message(rates: list, lang: str) -> str:
-    """Format the scraped rates into a nice Telegram HTML message."""
+    """Format the scraped rates into a beautifully spaced Telegram HTML message."""
     if not rates:
         return (
             "⚠️ تعذّر تحميل الأسعار حالياً. حاول مرة أخرى لاحقاً."
@@ -246,39 +246,42 @@ def format_rates_message(rates: list, lang: str) -> str:
             else "⚠️ Could not load rates right now. Please try again later."
         )
 
-    title = (
-        "💹 <b>أسعار الصرف مقابل الليرة السورية</b>"
-        if lang == "ar"
-        else "💹 <b>Exchange Rates vs Syrian Pound (SYP)</b>"
-    )
-    header = (
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "  <b>العملة</b>          <b>شراء</b>     <b>مبيع</b>"
-        if lang == "ar"
-        else
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "  <b>Currency</b>       <b>Buy</b>      <b>Sell</b>"
-    )
+    now = datetime.now().strftime("%H:%M")
+    if lang == "ar":
+        title  = f"💹 <b>أسعار الصرف مقابل الليرة السورية</b>\n🕐 آخر تحديث: {now}"
+        buy_l  = "شراء"
+        sell_l = "بيع"
+    else:
+        title  = f"💹 <b>Exchange Rates vs Syrian Pound (SYP)</b>\n🕐 Last updated: {now}"
+        buy_l  = "Buy"
+        sell_l = "Sell"
 
-    lines = [title, header]
+    lines = [title, ""]
+
     for code, ar_name, buy, sell, change in rates:
         flag = CURRENCY_FLAGS.get(code, "💵")
-        # Format change indicator
+
         if "▲" in change or "+" in change:
-            chg = f"↑{change.replace('▲','').replace('+','').strip()}"
+            chg_icon = "📈"
+            chg_val  = change.replace("▲","").replace("+","").strip()
+            chg_str  = f"{chg_icon} <i>+{chg_val}</i>"
         elif "▼" in change or "-" in change:
-            chg = f"↓{change.replace('▼','').replace('-','').strip()}"
+            chg_icon = "📉"
+            chg_val  = change.replace("▼","").replace("-","").strip()
+            chg_str  = f"{chg_icon} <i>-{chg_val}</i>"
         else:
-            chg = "─"
+            chg_str = "➖"
 
         name_display = ar_name if lang == "ar" else code
-        lines.append(
-            f"{flag} <b>{code}</b>  {name_display}\n"
-            f"    📥 {buy}  │  📤 {sell}   <i>{chg}</i>"
-        )
+
+        lines.append(f"┌ {flag} <b>{code}</b>  —  {name_display}")
+        lines.append(f"│  📥 <b>{buy_l}:</b>  {buy}")
+        lines.append(f"│  📤 <b>{sell_l}:</b> {sell}")
+        lines.append(f"└  {chg_str}")
+        lines.append("")   # blank line between currencies
 
     source = (
-        "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "📌 <a href='https://sp-today.com/currencies'>sp-today.com</a>"
     )
     lines.append(source)
@@ -565,14 +568,89 @@ async def show_welcome(target, edit: bool = False) -> None:
 # ══════════════════════════════════════════════
 #  ── /start ──
 # ══════════════════════════════════════════════
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+
+PERSISTENT_KB = ReplyKeyboardMarkup(resize_keyboard=True, row_width=3).add(
+    KeyboardButton("🏠 القائمة / Menu"),
+    KeyboardButton("💹 الأسعار / Rates"),
+    KeyboardButton("ℹ️ عن البوت / About"),
+)
+
 @dp.message_handler(commands=["start"], state="*")
 async def cmd_start(message: types.Message, state: FSMContext):
     try:
         await state.finish()
+        await message.answer("👇", reply_markup=PERSISTENT_KB)
         await show_welcome(message)
         await MarketFlow.language.set()
     except Exception as exc:
         logger.error("cmd_start: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── /rates shortcut ──
+# ══════════════════════════════════════════════
+@dp.message_handler(commands=["rates"], state="*")
+async def cmd_rates(message: types.Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        loading = "⏳ جارٍ تحميل الأسعار..." if lang == "ar" else "⏳ Loading rates..."
+        msg = await message.answer(loading)
+        rates = get_sptoday_rates()
+        text  = format_rates_message(rates, lang)
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
+        )
+        await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    except Exception as exc:
+        logger.error("cmd_rates: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── /help ──
+# ══════════════════════════════════════════════
+@dp.message_handler(commands=["help"], state="*")
+async def cmd_help(message: types.Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        if lang == "ar":
+            text = (
+                "❓ <b>المساعدة</b>\n\n"
+                "🏠 /start — القائمة الرئيسية\n"
+                "💹 /rates — أسعار الصرف الحية\n"
+                "ℹ️ /about — معلومات عن البوت\n"
+                "📊 /stats — إحصائيات (للمشرف)\n"
+                "⚙️ /admin — لوحة التحكم (للمشرف)\n\n"
+                "للبدء اضغط /start"
+            )
+        else:
+            text = (
+                "❓ <b>Help</b>\n\n"
+                "🏠 /start — Main Menu\n"
+                "💹 /rates — Live Exchange Rates\n"
+                "ℹ️ /about — About this bot\n"
+                "📊 /stats — Statistics (Admin)\n"
+                "⚙️ /admin — Admin Panel (Admin)\n\n"
+                "Press /start to begin"
+            )
+        await message.answer(text)
+    except Exception as exc:
+        logger.error("cmd_help: %s", exc)
+
+# ── Persistent keyboard button handlers ──
+@dp.message_handler(lambda m: m.text in ["🏠 القائمة / Menu"], state="*")
+async def kb_menu(message: types.Message, state: FSMContext):
+    await state.finish()
+    await show_welcome(message)
+    await MarketFlow.language.set()
+
+@dp.message_handler(lambda m: m.text in ["💹 الأسعار / Rates"], state="*")
+async def kb_rates(message: types.Message, state: FSMContext):
+    await cmd_rates(message, state)
+
+@dp.message_handler(lambda m: m.text in ["ℹ️ عن البوت / About"], state="*")
+async def kb_about(message: types.Message, state: FSMContext):
+    await cmd_about(message, state)
 
 # ══════════════════════════════════════════════
 #  ── /about ──
@@ -955,6 +1033,17 @@ signal.signal(signal.SIGINT,  _handle_signal)
 # ══════════════════════════════════════════════
 async def on_startup(dispatcher):
     await bot.delete_webhook(drop_pending_updates=True)
+    # ── Set bot command menu (the "/" button in Telegram) ──
+    from aiogram.types import BotCommand, BotCommandScopeDefault
+    commands = [
+        BotCommand("start",   "🏠 القائمة الرئيسية / Main Menu"),
+        BotCommand("rates",   "💹 أسعار الصرف / Exchange Rates"),
+        BotCommand("stats",   "📊 الإحصائيات / Statistics (Admin)"),
+        BotCommand("admin",   "⚙️ لوحة التحكم / Admin Panel"),
+        BotCommand("about",   "ℹ️ عن البوت / About"),
+        BotCommand("help",    "❓ المساعدة / Help"),
+    ]
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     logger.info("✅ Bot is running!")
 
 if __name__ == "__main__":
