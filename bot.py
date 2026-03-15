@@ -196,7 +196,7 @@ def get_sptoday_rates() -> list:
     """
     Fetch live exchange rates from sp-today API.
     Returns list of dicts with keys: code, name_ar, flag, buy, sell,
-    change_day, change_week, change_month, day_high, day_low.
+    change_day, change_week, change_month, change_year, day_high, day_low.
     """
     try:
         headers = {
@@ -230,6 +230,7 @@ def get_sptoday_rates() -> list:
                 "change_day":   city.get("change", 0),
                 "change_week":  city.get("change_week", 0),
                 "change_month": city.get("change_month", 0),
+                "change_year":  city.get("change_year", 0),
                 "day_high":     city.get("day_high", 0),
                 "day_low":      city.get("day_low", 0),
             })
@@ -240,6 +241,113 @@ def get_sptoday_rates() -> list:
     except Exception as exc:
         logger.error("get_sptoday_rates: %s", exc)
         return []
+
+
+def get_gold_rates() -> list:
+    """
+    Fetch live gold prices from sp-today API.
+    Returns list of dicts with keys: karat, buy, sell,
+    change_day, change_week, change_month, change_year, day_high, day_low.
+    """
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json",
+            "Origin": "https://sp-today.com",
+            "Referer": "https://sp-today.com/gold",
+        }
+        resp = requests.get(
+            "https://api-v2.sp-today.com/api/v1/gold",
+            headers=headers, timeout=10
+        )
+        payload = resp.json()
+        raw_karats = payload["data"]["karats"]
+
+        result = []
+        for item in raw_karats:
+            city = item.get("cities", {}).get("damascus", {})
+            if not city:
+                continue
+            result.append({
+                "karat":        item.get("karat", "??K"),
+                "buy":          city.get("buy", 0),
+                "sell":         city.get("sell", 0),
+                "change_day":   city.get("change", 0),
+                "change_week":  city.get("change_week", 0),
+                "change_month": city.get("change_month", 0),
+                "change_year":  city.get("change_year", 0),
+                "day_high":     city.get("day_high", 0),
+                "day_low":      city.get("day_low", 0),
+            })
+
+        logger.info("sp-today gold API: fetched %d karats", len(result))
+        return result
+
+    except Exception as exc:
+        logger.error("get_gold_rates: %s", exc)
+        return []
+
+
+def format_gold_message(gold: list, lang: str) -> str:
+    """Format gold rates into a clean Telegram HTML message."""
+    if not gold:
+        return (
+            "⚠️ تعذّر تحميل أسعار الذهب حالياً. حاول مرة أخرى لاحقاً."
+            if lang == "ar" else
+            "⚠️ Could not load gold prices right now. Please try again later."
+        )
+
+    now = datetime.now().strftime("%H:%M")
+    if lang == "ar":
+        title = f"🥇 <b>أسعار الذهب في سوريا (ل.س)</b>\n🕐 آخر تحديث: {now}"
+        buy_l  = "شراء"
+        sell_l = "بيع"
+        high_l = "أعلى"
+        low_l  = "أدنى"
+        gram_l = "غرام"
+    else:
+        title = f"🥇 <b>Gold Prices in Syria (SYP)</b>\n🕐 Last updated: {now}"
+        buy_l  = "Buy"
+        sell_l = "Sell"
+        high_l = "High"
+        low_l  = "Low"
+        gram_l = "gram"
+
+    lines = [title, ""]
+
+    for g in gold:
+        karat  = g["karat"]
+        buy    = f"{g['buy']:,}"
+        sell   = f"{g['sell']:,}"
+        high   = f"{g['day_high']:,}"
+        low    = f"{g['day_low']:,}"
+        chg_day   = g["change_day"]
+        chg_week  = g["change_week"]
+
+        # Daily badge
+        if chg_day > 0:
+            day_badge = f"📈 +{chg_day:.2f}%"
+        elif chg_day < 0:
+            day_badge = f"📉 {chg_day:.2f}%"
+        else:
+            day_badge = "➖ —"
+
+        lines.append(f"┌ 🥇 <b>{karat}</b>  ({gram_l})  {day_badge}")
+        lines.append(f"│  💰 <b>{buy_l}:</b>  <code>{buy}</code>   <b>{sell_l}:</b>  <code>{sell}</code>")
+        lines.append(f"│  📊 <b>{high_l}:</b> <code>{high}</code>   <b>{low_l}:</b> <code>{low}</code>")
+        lines.append(f"└  {_fmt_change(chg_week, 'أسبوعي', 'Week', lang)}")
+        lines.append("")  # blank line between karats
+
+    source = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📌 <a href='https://sp-today.com/gold'>sp-today.com/gold</a>"
+    )
+    lines.append(source)
+    return "\n".join(lines)
 
 
 def _fmt_change(val: float, label_ar: str, label_en: str, lang: str) -> str:
@@ -289,20 +397,19 @@ def format_rates_message(rates: list, lang: str) -> str:
         chg_day      = r["change_day"]
         chg_week     = r["change_week"]
         chg_month    = r["change_month"]
+        chg_year     = r.get("change_year", 0)
 
-        # Day change icon for header
+        # Daily badge: show change if non-zero, else show dash
         if chg_day > 0:
             day_badge = f"📈 +{chg_day:.2f}%"
         elif chg_day < 0:
             day_badge = f"📉 {chg_day:.2f}%"
         else:
-            day_badge = "➖ 0.00%"
-
-        lines.append(f"┌ {flag} <b>{code}</b>  {name_display}  {day_badge}")
+            day_badge = "➖ —"
+        lines.append(f"┌ {flag} <b>{code}</b>  {name_display}  <code>100</code>  {day_badge}")
         lines.append(f"│  💰 <b>{buy_l}:</b>  <code>{buy}</code>   <b>{sell_l}:</b>  <code>{sell}</code>")
         lines.append(f"│  📊 <b>{high_l}:</b> <code>{high}</code>   <b>{low_l}:</b> <code>{low}</code>")
-        lines.append(f"│  {_fmt_change(chg_week,  'أسبوعي', 'Week',  lang)}")
-        lines.append(f"└  {_fmt_change(chg_month, 'شهري',   'Month', lang)}")
+        lines.append(f"└  {_fmt_change(chg_week, 'أسبوعي', 'Week', lang)}")
         lines.append("")   # blank line between currencies
 
     source = (
@@ -430,6 +537,7 @@ TX = {
         "enter_email"     : "📧 <b>أدخل بريدك الإلكتروني للتأكيد (اختياري):</b>",
         "btn_skip_email"  : "⏭️ تخطي",
         "btn_rates"       : "💹 أسعار الصرف",
+        "btn_gold"        : "🥇 أسعار الذهب",
         "btn_back"        : "🏠 العودة للقائمة",
         "bad_amount"      : "⚠️ مبلغ غير صحيح. الرجاء إدخال رقم موجب.",
         "bad_email"       : "⚠️ بريد إلكتروني غير صحيح. أدخله مجدداً أو اضغط تخطي.",
@@ -477,6 +585,7 @@ TX = {
         "enter_email"     : "📧 <b>Enter your email for confirmation (optional):</b>",
         "btn_skip_email"  : "⏭️ Skip",
         "btn_rates"       : "💹 Exchange Rates",
+        "btn_gold"        : "🥇 Gold Prices",
         "btn_back"        : "🏠 Back to Menu",
         "bad_amount"      : "⚠️ Invalid amount. Please enter a positive number.",
         "bad_email"       : "⚠️ Invalid email address. Try again or press Skip.",
@@ -523,7 +632,10 @@ def type_kb(lang: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(t(lang, "btn_send"),    callback_data="type_send"),
         InlineKeyboardButton(t(lang, "btn_receive"), callback_data="type_receive"),
     )
-    kb.add(InlineKeyboardButton(t(lang, "btn_rates"), callback_data="show_rates"))
+    kb.add(
+        InlineKeyboardButton(t(lang, "btn_rates"), callback_data="show_rates"),
+        InlineKeyboardButton(t(lang, "btn_gold"),  callback_data="show_gold"),
+    )
     return kb
 
 def asset_kb(lang: str) -> InlineKeyboardMarkup:
@@ -595,9 +707,10 @@ async def show_welcome(target, edit: bool = False) -> None:
 # ══════════════════════════════════════════════
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-PERSISTENT_KB = ReplyKeyboardMarkup(resize_keyboard=True, row_width=3).add(
+PERSISTENT_KB = ReplyKeyboardMarkup(resize_keyboard=True, row_width=4).add(
     KeyboardButton("🏠 القائمة / Menu"),
     KeyboardButton("💹 الأسعار / Rates"),
+    KeyboardButton("🥇 الذهب / Gold"),
     KeyboardButton("ℹ️ عن البوت / About"),
 )
 
@@ -629,6 +742,25 @@ async def cmd_rates(message: types.Message, state: FSMContext):
         await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
     except Exception as exc:
         logger.error("cmd_rates: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── /gold command ──
+# ══════════════════════════════════════════════
+@dp.message_handler(commands=["gold"], state="*")
+async def cmd_gold(message: types.Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        loading = "⏳ جارٍ تحميل أسعار الذهب..." if lang == "ar" else "⏳ Loading gold prices..."
+        msg = await message.answer(loading)
+        gold = get_gold_rates()
+        text = format_gold_message(gold, lang)
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
+        )
+        await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    except Exception as exc:
+        logger.error("cmd_gold: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── /help ──
@@ -668,6 +800,10 @@ async def kb_menu(message: types.Message, state: FSMContext):
     await state.finish()
     await show_welcome(message)
     await MarketFlow.language.set()
+
+@dp.message_handler(lambda m: m.text in ["🥇 الذهب / Gold"], state="*")
+async def kb_gold(message: types.Message, state: FSMContext):
+    await cmd_gold(message, state)
 
 @dp.message_handler(lambda m: m.text in ["💹 الأسعار / Rates"], state="*")
 async def kb_rates(message: types.Message, state: FSMContext):
@@ -990,6 +1126,23 @@ async def msg_email(message: types.Message, state: FSMContext):
 # ══════════════════════════════════════════════
 #  ── EXCHANGE RATES (sp-today.com) ──
 # ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "show_gold", state="*")
+async def cb_show_gold(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        loading = "⏳ جارٍ تحميل أسعار الذهب..." if lang == "ar" else "⏳ Loading gold prices..."
+        await callback.answer(loading)
+        gold = get_gold_rates()
+        text = format_gold_message(gold, lang)
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton(t(lang, "btn_back"), callback_data="go_start")
+        )
+        await callback.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    except Exception as exc:
+        logger.error("cb_show_gold: %s", exc)
+
+
 @dp.callback_query_handler(lambda c: c.data == "show_rates", state="*")
 async def cb_show_rates(callback: types.CallbackQuery, state: FSMContext):
     try:
@@ -1063,6 +1216,7 @@ async def on_startup(dispatcher):
     commands = [
         BotCommand("start",   "🏠 القائمة الرئيسية / Main Menu"),
         BotCommand("rates",   "💹 أسعار الصرف / Exchange Rates"),
+        BotCommand("gold",    "🥇 أسعار الذهب / Gold Prices"),
         BotCommand("stats",   "📊 الإحصائيات / Statistics (Admin)"),
         BotCommand("admin",   "⚙️ لوحة التحكم / Admin Panel"),
         BotCommand("about",   "ℹ️ عن البوت / About"),
