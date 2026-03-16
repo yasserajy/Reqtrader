@@ -953,42 +953,60 @@ async def cmd_rates(message: types.Message, state: FSMContext):
 # ══════════════════════════════════════════════
 #  ── RATES: SYP section ──
 # ══════════════════════════════════════════════
-@dp.callback_query_handler(lambda c: c.data == "syp_rates", state="*")
+@dp.callback_query_handler(lambda c: c.data in ("syp_rates", "refresh_syp_rates"), state="*")
 async def cb_syp_rates(callback: types.CallbackQuery, state: FSMContext):
     try:
         data = await state.get_data()
         lang = data.get("language", "ar")
-        loading = "⏳ جارٍ تحميل أسعار الليرة..." if lang == "ar" else "⏳ Loading SYP rates..."
-        await callback.message.edit_text(loading)
+        is_refresh = callback.data == "refresh_syp_rates"
+        if is_refresh:
+            await callback.answer("🔄 جارٍ التحديث..." if lang == "ar" else "🔄 Refreshing...", show_alert=False)
+        else:
+            loading = "⏳ جارٍ تحميل أسعار الليرة..." if lang == "ar" else "⏳ Loading SYP rates..."
+            await callback.message.edit_text(loading)
         rates = get_sptoday_rates()
         text  = format_rates_message(rates, lang)
-        kb = InlineKeyboardMarkup(row_width=1).add(
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            InlineKeyboardButton("🔄 تحديث / Refresh", callback_data="refresh_syp_rates"),
+        )
+        kb.add(
             InlineKeyboardButton("◀️ رجوع / Back", callback_data="back_to_rates_menu"),
             InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
         )
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
-        await callback.answer()
+        if not is_refresh:
+            await callback.answer()
     except Exception as exc:
         logger.error("cb_syp_rates: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── RATES: Global section ──
 # ══════════════════════════════════════════════
-@dp.callback_query_handler(lambda c: c.data == "global_rates", state="*")
+@dp.callback_query_handler(lambda c: c.data in ("global_rates", "refresh_global_rates"), state="*")
 async def cb_global_rates(callback: types.CallbackQuery, state: FSMContext):
     try:
         data = await state.get_data()
         lang = data.get("language", "ar")
-        loading = "⏳ جارٍ تحميل الأسعار العالمية..." if lang == "ar" else "⏳ Loading global rates..."
-        await callback.message.edit_text(loading)
+        is_refresh = callback.data == "refresh_global_rates"
+        if is_refresh:
+            await callback.answer("🔄 جارٍ التحديث..." if lang == "ar" else "🔄 Refreshing...", show_alert=False)
+        else:
+            loading = "⏳ جارٍ تحميل الأسعار العالمية..." if lang == "ar" else "⏳ Loading global rates..."
+            await callback.message.edit_text(loading)
         pairs = get_global_rates()
         text  = format_global_rates_message(pairs, lang)
-        kb = InlineKeyboardMarkup(row_width=1).add(
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            InlineKeyboardButton("🔄 تحديث / Refresh", callback_data="refresh_global_rates"),
+        )
+        kb.add(
             InlineKeyboardButton("◀️ رجوع / Back", callback_data="back_to_rates_menu"),
             InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
         )
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
-        await callback.answer()
+        if not is_refresh:
+            await callback.answer()
     except Exception as exc:
         logger.error("cb_global_rates: %s", exc)
 
@@ -1015,12 +1033,28 @@ async def cmd_gold(message: types.Message, state: FSMContext):
         msg = await message.answer(loading)
         gold = get_gold_rates()
         text = format_gold_message(gold, lang)
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
-        )
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(InlineKeyboardButton("🔄 تحديث / Refresh", callback_data="refresh_gold"))
+        kb.add(InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"))
         await msg.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as exc:
         logger.error("cmd_gold: %s", exc)
+
+
+@dp.callback_query_handler(lambda c: c.data == "refresh_gold", state="*")
+async def cb_refresh_gold(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        await callback.answer("🔄 جارٍ التحديث..." if lang == "ar" else "🔄 Refreshing...", show_alert=False)
+        gold = get_gold_rates()
+        text = format_gold_message(gold, lang)
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(InlineKeyboardButton("🔄 تحديث / Refresh", callback_data="refresh_gold"))
+        kb.add(InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"))
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as exc:
+        logger.error("cb_refresh_gold: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── /help ──
