@@ -632,10 +632,6 @@ def type_kb(lang: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(t(lang, "btn_buy"),  callback_data="type_buy"),
         InlineKeyboardButton(t(lang, "btn_sell"), callback_data="type_sell"),
     )
-    kb.add(
-        InlineKeyboardButton(t(lang, "btn_rates"), callback_data="show_rates"),
-        InlineKeyboardButton(t(lang, "btn_gold"),  callback_data="show_gold"),
-    )
     return kb
 
 def asset_kb(lang: str) -> InlineKeyboardMarkup:
@@ -1126,7 +1122,7 @@ async def cb_show_gold(callback: types.CallbackQuery, state: FSMContext):
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton(t(lang, "btn_back"), callback_data="go_start")
         )
-        await callback.message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as exc:
         logger.error("cb_show_gold: %s", exc)
 
@@ -1151,6 +1147,7 @@ async def cb_show_rates(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             text,
             reply_markup=kb,
+            parse_mode="HTML",
             disable_web_page_preview=True,
         )
     except Exception as exc:
