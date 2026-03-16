@@ -734,7 +734,7 @@ async def cmd_rates(message: types.Message, state: FSMContext):
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
         )
-        await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as exc:
         logger.error("cmd_rates: %s", exc)
 
@@ -753,7 +753,7 @@ async def cmd_gold(message: types.Message, state: FSMContext):
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
         )
-        await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as exc:
         logger.error("cmd_gold: %s", exc)
 
