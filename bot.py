@@ -562,24 +562,25 @@ TX = {
             "اختر لغتك للبدء 👇\n"
             "<i>Select your language to begin 👇</i>"
         ),
-        "select_type"     : "📋 <b>اختر نوع العملية:</b>",
+        "select_type"     : "👋 <b>أهلاً! كيف يمكنني مساعدتك اليوم؟</b>\n\nاختر ما تريد القيام به:",
         "btn_buy"         : "🛒 شراء",
         "btn_sell"        : "💸 بيع",
-        "select_asset_b"  : "💱 <b>اختر العملة التي تريد شراءها:</b>",
-        "select_asset_sl" : "💱 <b>اختر العملة التي تريد بيعها:</b>",
-        "enter_amount"    : "💵 <b>أدخل المبلغ:</b>\n\nأو اختر مبلغًا سريعًا 👇",
-        "custom_amount"   : "أو اكتب مبلغًا مخصصًا 👇",
-        "select_pay_cur"  : "🌍 <b>اختر عملة الدفع:</b>",
-        "enter_price"     : "💲 <b>أدخل السعر المطلوب لكل وحدة:</b>",
-        "select_payment"  : "💳 <b>اختر طريقة الدفع:</b>",
-        "select_delivery" : "🚚 <b>اختر طريقة التسليم:</b>",
-        "enter_email"     : "📧 <b>أدخل بريدك الإلكتروني للتأكيد (اختياري):</b>",
+        "select_asset_b"  : "💱 <b>رائع! أي عملة تود شراءها؟</b>\n\nاختر من الخيارات أدناه 👇",
+        "select_asset_sl" : "💱 <b>حسناً! أي عملة تود بيعها؟</b>\n\nاختر من الخيارات أدناه 👇",
+        "enter_amount"    : "💵 <b>كم تريد؟</b>\n\nاختر مبلغاً سريعاً أدناه 👇 أو اضغط <b>أخرى</b> لإدخال مبلغ مختلف.",
+        "custom_amount"   : "✏️ <b>أدخل المبلغ:</b>",
+        "other_amount"    : "✍️ <b>أدخل المبلغ الذي تريده:</b>\n\nاكتب الرقم وأرسله 👇",
+        "select_pay_cur"  : "🌍 <b>ما هي عملة الدفع؟</b>\n\nاختر العملة التي ستدفع بها 👇",
+        "enter_price"     : "💲 <b>ما هو السعر المطلوب لكل وحدة؟</b>\n\nأدخل السعر يدوياً 👇",
+        "select_payment"  : "💳 <b>كيف تريد الدفع؟</b>\n\nاختر طريقة الدفع المناسبة لك 👇",
+        "select_delivery" : "🚚 <b>كيف تريد استلام مبلغك؟</b>\n\nاختر طريقة الاستلام 👇",
+        "enter_email"     : "📧 <b>هل تريد إرسال تأكيد على بريدك الإلكتروني؟</b>\n\nأدخل بريدك الإلكتروني أو اضغط <b>تخطي</b> إذا لم تكن بحاجة لذلك.",
         "btn_skip_email"  : "⏭️ تخطي",
         "btn_rates"       : "💹 أسعار الصرف",
         "btn_gold"        : "🥇 أسعار الذهب",
         "btn_back"        : "🏠 العودة للقائمة",
-        "bad_amount"      : "⚠️ مبلغ غير صحيح. الرجاء إدخال رقم موجب.",
-        "bad_email"       : "⚠️ بريد إلكتروني غير صحيح. أدخله مجدداً أو اضغط تخطي.",
+        "bad_amount"      : "⚠️ <b>المبلغ غير صحيح.</b>\n\nالرجاء إدخال رقم موجب وحاول مرة أخرى 👇",
+        "bad_email"       : "⚠️ <b>البريد الإلكتروني غير صحيح.</b>\n\nحاول مرة أخرى أو اضغط <b>تخطي</b>.",
         "about": (
             "ℹ️ <b>عن البوت</b>\n\n"
             "بوت التحويل v3.1\n"
@@ -598,7 +599,7 @@ TX = {
         "total_lbl"    : "الإجمالي",
         "rate_lbl"     : "سعر السوق",
         "date_lbl"     : "التاريخ",
-        "done_title"   : "✅ تم تسجيل طلبك بنجاح!",
+        "done_title"   : "🎉 <b>تم تسجيل طلبك بنجاح!</b>\n\nشكراً لك، سيتواصل معك فريقنا قريباً. إليك ملخص طلبك:",
     },
     "en": {
         "welcome": (
@@ -610,24 +611,25 @@ TX = {
             "<i>اختر لغتك للبدء 👇</i>\n"
             "Select your language to begin 👇"
         ),
-        "select_type"     : "📋 <b>Select operation type:</b>",
+        "select_type"     : "👋 <b>Hey there! What would you like to do today?</b>\n\nChoose an option below:",
         "btn_buy"         : "🛒 Buy",
         "btn_sell"        : "💸 Sell",
-        "select_asset_b"  : "💱 <b>Select currency to buy:</b>",
-        "select_asset_sl" : "💱 <b>Select currency to sell:</b>",
-        "enter_amount"    : "💵 <b>Enter the amount:</b>\n\nOr pick a quick amount 👇",
-        "custom_amount"   : "Or type a custom amount 👇",
-        "select_pay_cur"  : "🌍 <b>Select payment currency:</b>",
-        "enter_price"     : "💲 <b>Enter the price per unit:</b>",
-        "select_payment"  : "💳 <b>Select payment method:</b>",
-        "select_delivery" : "🚚 <b>Select delivery method:</b>",
-        "enter_email"     : "📧 <b>Enter your email for confirmation (optional):</b>",
+        "select_asset_b"  : "💱 <b>Great choice! Which currency would you like to buy?</b>\n\nPick one below 👇",
+        "select_asset_sl" : "💱 <b>Sure! Which currency would you like to sell?</b>\n\nPick one below 👇",
+        "enter_amount"    : "💵 <b>How much would you like?</b>\n\nTap a quick amount below 👇 or press <b>Other</b> to enter a different amount.",
+        "custom_amount"   : "✏️ <b>Enter the amount:</b>",
+        "other_amount"    : "✍️ <b>Enter your desired amount:</b>\n\nType the number and send it 👇",
+        "select_pay_cur"  : "🌍 <b>Which currency will you pay with?</b>\n\nSelect your payment currency below 👇",
+        "enter_price"     : "💲 <b>What price per unit are you looking for?</b>\n\nEnter the price manually 👇",
+        "select_payment"  : "💳 <b>How would you like to pay?</b>\n\nChoose your preferred payment method 👇",
+        "select_delivery" : "🚚 <b>How would you like to receive your funds?</b>\n\nChoose a delivery method below 👇",
+        "enter_email"     : "📧 <b>Would you like a confirmation sent to your email?</b>\n\nEnter your email address or tap <b>Skip</b> if you'd rather not.",
         "btn_skip_email"  : "⏭️ Skip",
         "btn_rates"       : "💹 Exchange Rates",
         "btn_gold"        : "🥇 Gold Prices",
         "btn_back"        : "🏠 Back to Menu",
-        "bad_amount"      : "⚠️ Invalid amount. Please enter a positive number.",
-        "bad_email"       : "⚠️ Invalid email address. Try again or press Skip.",
+        "bad_amount"      : "⚠️ <b>That doesn't look right.</b>\n\nPlease enter a valid positive number and try again 👇",
+        "bad_email"       : "⚠️ <b>That email doesn't look valid.</b>\n\nPlease try again or tap <b>Skip</b>.",
         "about": (
             "ℹ️ <b>About the Bot</b>\n\n"
             "Transfer Bot v3.1\n"
@@ -646,7 +648,7 @@ TX = {
         "total_lbl"    : "Total",
         "rate_lbl"     : "Market Rate",
         "date_lbl"     : "Date",
-        "done_title"   : "✅ Your order has been submitted!",
+        "done_title"   : "🎉 <b>Your order has been submitted!</b>\n\nThank you! Our team will be in touch with you shortly. Here's a summary of your order:",
     },
 }
 
@@ -680,10 +682,21 @@ def asset_kb(lang: str) -> InlineKeyboardMarkup:
     kb.add(_back_btn(lang))
     return kb
 
+def sell_asset_kb(lang: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("💵 USDT", callback_data="ast_USDT"),
+        InlineKeyboardButton("💵 USDC", callback_data="ast_USDC"),
+    )
+    kb.add(_back_btn(lang))
+    return kb
+
 def amount_kb(lang: str, asset: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=3)
-    if asset in ("USD", "EUR"):
+    if asset in ("USD", "EUR", "USDT", "USDC"):
         kb.add(*[InlineKeyboardButton(str(a), callback_data=f"amt_{a}") for a in QUICK_AMOUNTS])
+        other_label = "✏️ أخرى" if lang == "ar" else "✏️ Other"
+        kb.add(InlineKeyboardButton(other_label, callback_data="amt_other"))
     kb.add(_back_btn(lang))
     return kb
 
@@ -933,7 +946,8 @@ async def cb_type(callback: types.CallbackQuery, state: FSMContext):
             "sell": "select_asset_sl",
         }
         asset_key = asset_key_map.get(trade_type, "select_asset_b")
-        await callback.message.edit_text(t(lang, asset_key), reply_markup=asset_kb(lang))
+        kb = sell_asset_kb(lang)
+        await callback.message.edit_text(t(lang, asset_key), reply_markup=kb)
         await MarketFlow.asset.set()
     except Exception as exc:
         logger.error("cb_type: %s", exc)
@@ -963,11 +977,24 @@ async def cb_asset(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data.startswith("amt_"), state=MarketFlow.amount)
 async def cb_amount_quick(callback: types.CallbackQuery, state: FSMContext):
     try:
-        data   = await state.get_data()
-        lang   = data.get("language", "en")
-        amount = float(callback.data.split("_", 1)[1])
+        data    = await state.get_data()
+        lang    = data.get("language", "en")
+        raw     = callback.data.split("_", 1)[1]
+
+        if raw == "other":
+            # Ask user to type a custom amount
+            await callback.message.edit_text(
+                t(lang, "other_amount"),
+                reply_markup=back_kb(lang),
+                parse_mode="HTML"
+            )
+            # Stay in MarketFlow.amount state so msg_amount picks it up
+            await callback.answer()
+            return
+
+        amount = float(raw)
         await state.update_data(amount=amount)
-        await callback.message.edit_text(t(lang, "select_pay_cur"), reply_markup=pay_cur_kb(lang))
+        await callback.message.edit_text(t(lang, "select_pay_cur"), reply_markup=pay_cur_kb(lang), parse_mode="HTML")
         await MarketFlow.currency.set()
     except Exception as exc:
         logger.error("cb_amount_quick: %s", exc)
@@ -1095,9 +1122,9 @@ async def _finish_trade(lang: str, data: dict, user, send_to: str | None, reply_
     )
 
     if hasattr(reply_target, 'message'):
-        await reply_target.message.edit_text(summary, reply_markup=back_kb(lang))
+        await reply_target.message.edit_text(summary, reply_markup=back_kb(lang), parse_mode="HTML")
     else:
-        await reply_target.answer(summary, reply_markup=back_kb(lang))
+        await reply_target.answer(summary, reply_markup=back_kb(lang), parse_mode="HTML")
 
     try:
         await bot.send_message(GROUP_ID, summary)
