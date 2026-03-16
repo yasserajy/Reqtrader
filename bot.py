@@ -271,6 +271,123 @@ def get_sptoday_rates() -> list:
         return []
 
 
+def get_global_rates() -> list:
+    """
+    Fetch global forex rates for SEK/EUR, SEK/USD, USD/EUR from Frankfurter API.
+    Returns list of dicts with keys: base, quote, flag_base, flag_quote,
+    mid, buy, sell, change_day, change_week, day_high, day_low.
+    """
+    try:
+        from datetime import timedelta
+        pairs = [
+            ("SEK", "EUR", "🇸🇪", "🇪🇺", 0.003),
+            ("SEK", "USD", "🇸🇪", "🇺🇸", 0.003),
+            ("USD", "EUR", "🇺🇸", "🇪🇺", 0.0015),
+        ]
+        today     = datetime.now()
+        yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        week_ago  = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        def _fetch(date_str, base, quote):
+            url = f"https://api.frankfurter.app/{date_str}?from={base}&to={quote}"
+            r = requests.get(url, timeout=10)
+            return r.json()["rates"][quote]
+
+        result = []
+        for base, quote, flag_b, flag_q, spread in pairs:
+            try:
+                mid_today = _fetch("latest", base, quote)
+                try:
+                    mid_prev  = _fetch(yesterday, base, quote)
+                    chg_day   = ((mid_today - mid_prev) / mid_prev) * 100
+                except Exception:
+                    chg_day = 0.0
+                try:
+                    mid_week  = _fetch(week_ago, base, quote)
+                    chg_week  = ((mid_today - mid_week) / mid_week) * 100
+                except Exception:
+                    chg_week = 0.0
+
+                buy  = mid_today * (1 - spread / 2)
+                sell = mid_today * (1 + spread / 2)
+                result.append({
+                    "base":       base,
+                    "quote":      quote,
+                    "flag_base":  flag_b,
+                    "flag_quote": flag_q,
+                    "mid":        mid_today,
+                    "buy":        buy,
+                    "sell":       sell,
+                    "change_day": round(chg_day, 4),
+                    "change_week": round(chg_week, 4),
+                    "day_high":   mid_today * (1 + spread / 2),
+                    "day_low":    mid_today * (1 - spread / 2),
+                })
+            except Exception as e:
+                logger.warning("Global rate %s/%s error: %s", base, quote, e)
+
+        logger.info("Frankfurter: fetched %d global pairs", len(result))
+        return result
+
+    except Exception as exc:
+        logger.error("get_global_rates: %s", exc)
+        return []
+
+
+def format_global_rates_message(pairs: list, lang: str) -> str:
+    """Format global forex rates into the same card design as SYP rates."""
+    if not pairs:
+        return (
+            "⚠️ تعذّر تحميل الأسعار العالمية حالياً. حاول مرة أخرى لاحقاً."
+            if lang == "ar" else
+            "⚠️ Could not load global rates right now. Please try again later."
+        )
+
+    now = datetime.now().strftime("%H:%M")
+    if lang == "ar":
+        title  = f"🌍 <b>أسعار الصرف العالمية</b>  |  لكل 1000 وحدة\n🕐 آخر تحديث: {now}"
+        buy_l  = "شراء"; sell_l = "بيع"; high_l = "أعلى"; low_l = "أدنى"
+    else:
+        title  = f"🌍 <b>Global Exchange Rates</b>  |  per 1000 units\n🕐 Last updated: {now}"
+        buy_l  = "Buy"; sell_l = "Sell"; high_l = "High"; low_l = "Low"
+
+    # Name labels
+    names_ar = {"SEK/EUR": "كرون ← يورو", "SEK/USD": "كرون ← دولار", "USD/EUR": "دولار ← يورو"}
+    names_en = {"SEK/EUR": "SEK → EUR", "SEK/USD": "SEK → USD", "USD/EUR": "USD → EUR"}
+
+    lines = [title, ""]
+    for p in pairs:
+        key       = f"{p['base']}/{p['quote']}"
+        name      = names_ar.get(key, key) if lang == "ar" else names_en.get(key, key)
+        flag      = f"{p['flag_base']}{p['flag_quote']}"
+        buy       = f"{p['buy'] * 1000:.4f}"
+        sell      = f"{p['sell'] * 1000:.4f}"
+        high      = f"{p['day_high'] * 1000:.4f}"
+        low       = f"{p['day_low'] * 1000:.4f}"
+        chg_day   = p["change_day"]
+        chg_week  = p["change_week"]
+
+        if chg_day > 0:
+            day_badge = f"📈 +{chg_day:.2f}%"
+        elif chg_day < 0:
+            day_badge = f"📉 {chg_day:.2f}%"
+        else:
+            day_badge = "➖ —"
+
+        lines.append(f"┌ {p['flag_base']} <code>1000 {p['base']}</code> ➡️ {p['flag_quote']} <b>{p['quote']}</b>  {day_badge}")
+        lines.append(f"│  💰 <b>{buy_l}:</b>  <code>{buy}</code>   <b>{sell_l}:</b>  <code>{sell}</code>")
+        lines.append(f"│  📊 <b>{high_l}:</b> <code>{high}</code>   <b>{low_l}:</b> <code>{low}</code>")
+        lines.append(f"└  {_fmt_change(chg_week, 'أسبوعي', 'Week', lang)}")
+        lines.append("")
+
+    source = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📌 <a href='https://www.frankfurter.app'>Frankfurter.app</a>"
+    )
+    lines.append(source)
+    return "\n".join(lines)
+
+
 def get_gold_rates() -> list:
     """
     Fetch live gold prices from sp-today API.
@@ -704,25 +821,32 @@ def amount_kb(lang: str, asset: str) -> InlineKeyboardMarkup:
     kb.add(_back_to_asset_btn(lang))
     return kb
 
+def _back_step_btn(lang: str, callback_data: str) -> InlineKeyboardButton:
+    label = "◀️ رجوع" if lang == "ar" else "◀️ Back"
+    return InlineKeyboardButton(label, callback_data=callback_data)
+
 def pay_cur_kb(lang: str) -> InlineKeyboardMarkup:
     currencies = get_enabled_currencies()
     kb = InlineKeyboardMarkup(row_width=3)
     kb.add(*[InlineKeyboardButton(c, callback_data=f"cur_{c}") for c in currencies])
-    kb.add(_back_btn(lang))
+    kb.add(_back_step_btn(lang, "back_to_amount"))
     return kb
+
+def price_back_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup().add(_back_step_btn(lang, "back_to_currency"))
 
 def payment_method_kb(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     for label, value in PAYMENT_METHODS.get(lang, PAYMENT_METHODS["en"]):
         kb.add(InlineKeyboardButton(label, callback_data=f"pay_{value}"))
-    kb.add(_back_btn(lang))
+    kb.add(_back_step_btn(lang, "back_to_price"))
     return kb
 
 def delivery_method_kb(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     for label, value in DELIVERY_METHODS.get(lang, DELIVERY_METHODS["en"]):
         kb.add(InlineKeyboardButton(label, callback_data=f"del_{value}"))
-    kb.add(_back_btn(lang))
+    kb.add(_back_step_btn(lang, "back_to_payment"))
     return kb
 
 def back_kb(lang: str) -> InlineKeyboardMarkup:
@@ -779,24 +903,95 @@ async def cmd_start(message: types.Message, state: FSMContext):
 #  ── /rates shortcut ──
 # ══════════════════════════════════════════════
 @dp.message_handler(commands=["rates"], state="*")
+async def show_rates_menu(target, lang: str):
+    """Show the rates type selection menu (SYP or Global)."""
+    if lang == "ar":
+        text = "💹 <b>اختر نوع الأسعار</b>"
+        kb = InlineKeyboardMarkup(row_width=1).add(
+            InlineKeyboardButton("🇸🇾 أسعار مقابل الليرة السورية", callback_data="syp_rates"),
+            InlineKeyboardButton("🌍 أسعار عالمية (SEK/EUR · SEK/USD · USD/EUR)", callback_data="global_rates"),
+            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
+        )
+    else:
+        text = "💹 <b>Choose rate type</b>"
+        kb = InlineKeyboardMarkup(row_width=1).add(
+            InlineKeyboardButton("🇸🇾 Rates vs Syrian Pound (SYP)", callback_data="syp_rates"),
+            InlineKeyboardButton("🌍 Global Rates (SEK/EUR · SEK/USD · USD/EUR)", callback_data="global_rates"),
+            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
+        )
+    if hasattr(target, "edit_text"):
+        await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 async def cmd_rates(message: types.Message, state: FSMContext):
     try:
         data = await state.get_data()
         lang = data.get("language", "ar")
-        loading = "⏳ جارٍ تحميل الأسعار..." if lang == "ar" else "⏳ Loading rates..."
-        msg = await message.answer(loading)
-        rates = get_sptoday_rates()
-        text  = format_rates_message(rates, lang)
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
-        )
-        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+        await show_rates_menu(message, lang)
     except Exception as exc:
         logger.error("cmd_rates: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── /gold command ──
 # ══════════════════════════════════════════════
+# ══════════════════════════════════════════════
+#  ── RATES: SYP section ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "syp_rates", state="*")
+async def cb_syp_rates(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        loading = "⏳ جارٍ تحميل أسعار الليرة..." if lang == "ar" else "⏳ Loading SYP rates..."
+        await callback.message.edit_text(loading)
+        rates = get_sptoday_rates()
+        text  = format_rates_message(rates, lang)
+        kb = InlineKeyboardMarkup(row_width=1).add(
+            InlineKeyboardButton("◀️ رجوع / Back", callback_data="back_to_rates_menu"),
+            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
+        )
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_syp_rates: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── RATES: Global section ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "global_rates", state="*")
+async def cb_global_rates(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        loading = "⏳ جارٍ تحميل الأسعار العالمية..." if lang == "ar" else "⏳ Loading global rates..."
+        await callback.message.edit_text(loading)
+        pairs = get_global_rates()
+        text  = format_global_rates_message(pairs, lang)
+        kb = InlineKeyboardMarkup(row_width=1).add(
+            InlineKeyboardButton("◀️ رجوع / Back", callback_data="back_to_rates_menu"),
+            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
+        )
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_global_rates: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── RATES: Back to menu ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "back_to_rates_menu", state="*")
+async def cb_back_to_rates_menu(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "ar")
+        await show_rates_menu(callback.message, lang)
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_back_to_rates_menu: %s", exc)
+
+
 @dp.message_handler(commands=["gold"], state="*")
 async def cmd_gold(message: types.Message, state: FSMContext):
     try:
@@ -1065,7 +1260,7 @@ async def cb_currency(callback: types.CallbackQuery, state: FSMContext):
                 f"\n\nJust type the amount and send it 👇"
             )
 
-        await callback.message.edit_text(price_msg, parse_mode="HTML", reply_markup=back_kb(lang))
+        await callback.message.edit_text(price_msg, parse_mode="HTML", reply_markup=price_back_kb(lang))
         await MarketFlow.price.set()
     except Exception as exc:
         logger.error("cb_currency: %s", exc)
@@ -1123,7 +1318,7 @@ async def cb_delivery(callback: types.CallbackQuery, state: FSMContext):
         await state.update_data(delivery=label)
         email_kb = InlineKeyboardMarkup(row_width=2).add(
             InlineKeyboardButton(t(lang, "btn_skip_email"), callback_data="skip_email"),
-            InlineKeyboardButton(t(lang, "btn_back"),       callback_data="go_back"),
+            _back_step_btn(lang, "back_to_delivery"),
         )
         await callback.message.edit_text(t(lang, "enter_email"), reply_markup=email_kb)
         await MarketFlow.email.set()
@@ -1287,6 +1482,108 @@ async def cb_show_rates(callback: types.CallbackQuery, state: FSMContext):
     except Exception as exc:
         logger.error("cb_show_rates: %s", exc)
 
+
+# ══════════════════════════════════════════════
+#  ── BACK: CURRENCY → AMOUNT ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "back_to_amount", state="*")
+async def cb_back_to_amount(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data  = await state.get_data()
+        lang  = data.get("language", "en")
+        asset = data.get("asset", "USDT")
+        text  = t(lang, "enter_amount")
+        if asset not in ("USD", "EUR"):
+            text += f"\n{t(lang, 'custom_amount')}"
+        await callback.message.edit_text(text, reply_markup=amount_kb(lang, asset))
+        await MarketFlow.amount.set()
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_back_to_amount: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── BACK: PRICE → CURRENCY ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "back_to_currency", state="*")
+async def cb_back_to_currency(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "en")
+        await callback.message.edit_text(t(lang, "select_pay_cur"), reply_markup=pay_cur_kb(lang), parse_mode="HTML")
+        await MarketFlow.currency.set()
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_back_to_currency: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── BACK: PAYMENT → PRICE ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "back_to_price", state="*")
+async def cb_back_to_price(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data     = await state.get_data()
+        lang     = data.get("language", "en")
+        asset    = data.get("asset", "USDT")
+        currency = data.get("currency", "USD")
+
+        live_rate, rate_source = fetch_crypto_reference(asset, currency)
+        asset_label    = "100 EUR" if currency == "EUR" else "100 USD"
+        asset_label_ar = "100 يورو" if currency == "EUR" else "100 دولار"
+        cur_symbol     = "€" if currency == "EUR" else "$"
+
+        if live_rate is not None:
+            rate_line_en = f"\n\n📊 <b>Live Rate:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+            rate_line_ar = f"\n\n📊 <b>السعر الحالي:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+        else:
+            rate_line_en = "\n\n⚠️ <i>Live rate unavailable right now.</i>"
+            rate_line_ar = "\n\n⚠️ <i>تعذّر جلب السعر الحالي في الوقت الفعلي.</i>"
+
+        if lang == "ar":
+            price_msg = (
+                f"💲 <b>ما هو السعر الذي تبحث عنه لكل {asset_label_ar}؟</b>"
+                f"{rate_line_ar}"
+                f"\n\nاكتب المبلغ وأرسله 👇"
+            )
+        else:
+            price_msg = (
+                f"💲 <b>What's your target price per {asset_label}?</b>"
+                f"{rate_line_en}"
+                f"\n\nJust type the amount and send it 👇"
+            )
+
+        await callback.message.edit_text(price_msg, parse_mode="HTML", reply_markup=price_back_kb(lang))
+        await MarketFlow.price.set()
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_back_to_price: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── BACK: DELIVERY → PAYMENT ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "back_to_payment", state="*")
+async def cb_back_to_payment(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "en")
+        await callback.message.edit_text(t(lang, "select_payment"), reply_markup=payment_method_kb(lang), parse_mode="HTML")
+        await MarketFlow.payment.set()
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_back_to_payment: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── BACK: EMAIL → DELIVERY ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "back_to_delivery", state="*")
+async def cb_back_to_delivery(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "en")
+        await callback.message.edit_text(t(lang, "select_delivery"), reply_markup=delivery_method_kb(lang), parse_mode="HTML")
+        await MarketFlow.delivery.set()
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_back_to_delivery: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── BACK TO ASSET SELECTION ──
