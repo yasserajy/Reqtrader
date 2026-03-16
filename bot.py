@@ -577,7 +577,7 @@ def format_rates_message(rates: list, lang: str) -> str:
 
 
 def save_trade(data: dict, user: types.User) -> tuple:
-    total = data["amount"] * data["price"]
+    total = (data["amount"] / 100) * data["price"]
     date  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     usd_snap, eur_snap = get_market_rates()
     with sqlite3.connect("market.db") as conn:
@@ -655,15 +655,16 @@ dp  = Dispatcher(bot, storage=MemoryStorage())
 #  FSM STATES
 # ══════════════════════════════════════════════
 class MarketFlow(StatesGroup):
-    language = State()
-    type     = State()
-    asset    = State()
-    amount   = State()
-    currency = State()
-    price    = State()
-    payment  = State()   # ← payment method (bank/cash/wallet)
-    delivery = State()   # ← delivery method (bank/cash/wallet/inperson)
-    email    = State()
+    language     = State()
+    type         = State()
+    asset        = State()
+    amount       = State()
+    currency     = State()
+    price        = State()
+    confirm_calc = State()   # ← new: show calculation preview before payment
+    payment      = State()   # ← payment method (bank/cash/wallet)
+    delivery     = State()   # ← delivery method (bank/cash/wallet/inperson)
+    email        = State()
 
 # ══════════════════════════════════════════════
 #  LOCALISED STRINGS
@@ -688,7 +689,7 @@ TX = {
         "custom_amount"   : "✏️ <b>أدخل المبلغ:</b>",
         "other_amount"    : "✍️ <b>أدخل المبلغ الذي تريده:</b>\n\nاكتب الرقم وأرسله 👇",
         "select_pay_cur"  : "🌍 <b>ما هي عملة الدفع؟</b>\n\nاختر العملة التي ستدفع بها 👇",
-        "enter_price"     : "💲 <b>ما هو السعر الذي تبحث عنه لكل 100 دولار؟</b>\n\nاكتب المبلغ وأرسله 👇",
+        "enter_price"     : "💱 <b>ما هو سعرك المطلوب؟</b>\n\nاكتب المبلغ وأرسله 👇",
         "select_payment"  : "💳 <b>كيف تريد الدفع؟</b>\n\nاختر طريقة الدفع المناسبة لك 👇",
         "select_delivery" : "🚚 <b>كيف تريد استلام مبلغك؟</b>\n\nاختر طريقة الاستلام 👇",
         "enter_email"     : "📧 <b>هل تريد إرسال تأكيد على بريدك الإلكتروني؟</b>\n\nأدخل بريدك الإلكتروني أو اضغط <b>تخطي</b> إذا لم تكن بحاجة لذلك.",
@@ -737,7 +738,7 @@ TX = {
         "custom_amount"   : "✏️ <b>Enter the amount:</b>",
         "other_amount"    : "✍️ <b>Enter your desired amount:</b>\n\nType the number and send it 👇",
         "select_pay_cur"  : "🌍 <b>Which currency will you pay with?</b>\n\nSelect your payment currency below 👇",
-        "enter_price"     : "💲 <b>What's your target price per 100 USD?</b>\n\nJust type the amount and send it 👇",
+        "enter_price"     : "💱 <b>What's your offer rate?</b>\n\nJust type the amount and send it 👇",
         "select_payment"  : "💳 <b>How would you like to pay?</b>\n\nChoose your preferred payment method 👇",
         "select_delivery" : "🚚 <b>How would you like to receive your funds?</b>\n\nChoose a delivery method below 👇",
         "enter_email"     : "📧 <b>Would you like a confirmation sent to your email?</b>\n\nEnter your email address or tap <b>Skip</b> if you'd rather not.",
@@ -902,34 +903,44 @@ async def cmd_start(message: types.Message, state: FSMContext):
 # ══════════════════════════════════════════════
 #  ── /rates shortcut ──
 # ══════════════════════════════════════════════
-@dp.message_handler(commands=["rates"], state="*")
-async def show_rates_menu(target, lang: str):
-    """Show the rates type selection menu (SYP or Global)."""
+async def show_rates_menu(target, lang: str, edit: bool = False):
+    """Show the rates type selection menu (SYP or Global).
+    target: a Message object.
+    edit=True  → edit in place (use when coming back from a submenu).
+    edit=False → send a new message (use when triggered from keyboard/command).
+    """
     if lang == "ar":
-        text = "💹 <b>اختر نوع الأسعار</b>"
+        text = (
+            "💹 <b>اختر نوع الأسعار</b>\n\n"
+            "اختر القسم الذي تريد الاطلاع عليه 👇"
+        )
         kb = InlineKeyboardMarkup(row_width=1).add(
             InlineKeyboardButton("🇸🇾 أسعار مقابل الليرة السورية", callback_data="syp_rates"),
-            InlineKeyboardButton("🌍 أسعار عالمية (SEK/EUR · SEK/USD · USD/EUR)", callback_data="global_rates"),
-            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
+            InlineKeyboardButton("🌍 أسعار عالمية  (SEK · USD · EUR)", callback_data="global_rates"),
+            InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="back_to_main"),
         )
     else:
-        text = "💹 <b>Choose rate type</b>"
+        text = (
+            "💹 <b>Choose Rate Type</b>\n\n"
+            "Select the section you'd like to view 👇"
+        )
         kb = InlineKeyboardMarkup(row_width=1).add(
             InlineKeyboardButton("🇸🇾 Rates vs Syrian Pound (SYP)", callback_data="syp_rates"),
-            InlineKeyboardButton("🌍 Global Rates (SEK/EUR · SEK/USD · USD/EUR)", callback_data="global_rates"),
-            InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"),
+            InlineKeyboardButton("🌍 Global Rates  (SEK · USD · EUR)", callback_data="global_rates"),
+            InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main"),
         )
-    if hasattr(target, "edit_text"):
+    if edit:
         await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+@dp.message_handler(commands=["rates"], state="*")
 async def cmd_rates(message: types.Message, state: FSMContext):
     try:
         data = await state.get_data()
         lang = data.get("language", "ar")
-        await show_rates_menu(message, lang)
+        await show_rates_menu(message, lang, edit=False)
     except Exception as exc:
         logger.error("cmd_rates: %s", exc)
 
@@ -986,7 +997,7 @@ async def cb_back_to_rates_menu(callback: types.CallbackQuery, state: FSMContext
     try:
         data = await state.get_data()
         lang = data.get("language", "ar")
-        await show_rates_menu(callback.message, lang)
+        await show_rates_menu(callback.message, lang, edit=True)
         await callback.answer()
     except Exception as exc:
         logger.error("cb_back_to_rates_menu: %s", exc)
@@ -1194,6 +1205,7 @@ async def cb_amount_quick(callback: types.CallbackQuery, state: FSMContext):
 
         amount = float(raw)
         await state.update_data(amount=amount)
+        await callback.answer()
         await callback.message.edit_text(t(lang, "select_pay_cur"), reply_markup=pay_cur_kb(lang), parse_mode="HTML")
         await MarketFlow.currency.set()
     except Exception as exc:
@@ -1236,26 +1248,28 @@ async def cb_currency(callback: types.CallbackQuery, state: FSMContext):
         # Fetch live rate (CoinGecko → CryptoCompare fallback)
         live_rate, rate_source = fetch_crypto_reference(asset, currency)
 
-        asset_label    = "100 EUR" if currency == "EUR" else "100 USD"
-        asset_label_ar = "100 يورو" if currency == "EUR" else "100 دولار"
-        cur_symbol     = "€" if currency == "EUR" else "$"
+        cur_symbol = "€" if currency == "EUR" else "$"
 
         if live_rate is not None:
-            rate_line_en = f"\n\n📊 <b>Live Rate:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
-            rate_line_ar = f"\n\n📊 <b>السعر الحالي:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+            rate_line_en = f"\n📊 <b>Live Rate:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+            rate_line_ar = f"\n📊 <b>السعر الحالي:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
         else:
-            rate_line_en = "\n\n⚠️ <i>Live rate unavailable right now.</i>"
-            rate_line_ar = "\n\n⚠️ <i>تعذّر جلب السعر الحالي في الوقت الفعلي.</i>"
+            rate_line_en = "\n⚠️ <i>Live rate unavailable right now.</i>"
+            rate_line_ar = "\n⚠️ <i>تعذّر جلب السعر الحالي في الوقت الفعلي.</i>"
 
         if lang == "ar":
             price_msg = (
-                f"💲 <b>ما هو السعر الذي تبحث عنه لكل {asset_label_ar}؟</b>"
+                f"💱 <b>ما هو سعرك المطلوب؟</b>\n\n"
+                f"أدخل كم <b>{currency}</b> تريد مقابل كل <b>100 {asset}</b>\n"
+                f"✏️ مثال: اكتب <code>101</code> إذا كان سعرك <b>101 {currency}</b> لكل <b>100 {asset}</b>\n"
                 f"{rate_line_ar}"
                 f"\n\nاكتب المبلغ وأرسله 👇"
             )
         else:
             price_msg = (
-                f"💲 <b>What's your target price per {asset_label}?</b>"
+                f"💱 <b>What's your offer rate?</b>\n\n"
+                f"Enter how much <b>{currency}</b> per <b>100 {asset}</b>\n"
+                f"✏️ Example: type <code>101</code> if your rate is <b>101 {currency}</b> per <b>100 {asset}</b>\n"
                 f"{rate_line_en}"
                 f"\n\nJust type the amount and send it 👇"
             )
@@ -1282,10 +1296,103 @@ async def msg_price(message: types.Message, state: FSMContext):
             await message.answer(t(lang, "bad_amount"))
             return
         await state.update_data(price=price)
-        await message.answer(t(lang, "select_payment"), reply_markup=payment_method_kb(lang))
-        await MarketFlow.payment.set()
+
+        # Build calculation preview
+        amount   = data.get("amount", 0)
+        asset    = data.get("asset", "USDT")
+        currency = data.get("currency", "USD")
+        total    = (amount / 100) * price
+
+        confirm_kb = InlineKeyboardMarkup(row_width=2).add(
+            InlineKeyboardButton("✅ Confirm" if lang == "en" else "✅ تأكيد",       callback_data="calc_confirm"),
+            InlineKeyboardButton("✏️ Edit Rate" if lang == "en" else "✏️ تعديل السعر", callback_data="calc_edit"),
+        )
+
+        if lang == "ar":
+            preview = (
+                f"🧮 <b>ملخص الحساب — تحقق قبل المتابعة</b>\n"
+                f"{'━' * 28}\n"
+                f"📦 <b>الكمية:</b>         <code>{amount:,.2f} {asset}</code>\n"
+                f"💱 <b>سعرك المطلوب:</b>   <code>{price:,.2f} {currency}</code> لكل 100 {asset}\n"
+                f"{'─' * 28}\n"
+                f"🧾 <b>طريقة الحساب:</b>\n"
+                f"   ({amount:,.2f} ÷ 100) × {price:,.2f} = <b>{total:,.2f} {currency}</b>\n"
+                f"{'━' * 28}\n"
+                f"💰 <b>الإجمالي المتوقع:  {total:,.2f} {currency}</b>\n\n"
+                f"هل الحساب صحيح؟ 👇"
+            )
+        else:
+            preview = (
+                f"🧮 <b>Calculation Summary — please review before continuing</b>\n"
+                f"{'━' * 28}\n"
+                f"📦 <b>Amount:</b>        <code>{amount:,.2f} {asset}</code>\n"
+                f"💱 <b>Your Rate:</b>     <code>{price:,.2f} {currency}</code> per 100 {asset}\n"
+                f"{'─' * 28}\n"
+                f"🧾 <b>How it's calculated:</b>\n"
+                f"   ({amount:,.2f} ÷ 100) × {price:,.2f} = <b>{total:,.2f} {currency}</b>\n"
+                f"{'━' * 28}\n"
+                f"💰 <b>Total:  {total:,.2f} {currency}</b>\n\n"
+                f"Does this look correct? 👇"
+            )
+
+        await message.answer(preview, parse_mode="HTML", reply_markup=confirm_kb)
+        await MarketFlow.confirm_calc.set()
     except Exception as exc:
         logger.error("msg_price: %s", exc)
+
+
+# ══════════════════════════════════════════════
+#  ── CALCULATION CONFIRM / EDIT ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data in ("calc_confirm", "calc_edit"), state=MarketFlow.confirm_calc)
+async def cb_calc_confirm(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        lang = data.get("language", "en")
+        await callback.answer()
+
+        if callback.data == "calc_edit":
+            # Go back to price entry — re-fetch live rate
+            asset    = data.get("asset", "USDT")
+            currency = data.get("currency", "USD")
+            cur_symbol = "€" if currency == "EUR" else "$"
+            live_rate, rate_source = fetch_crypto_reference(asset, currency)
+
+            if live_rate is not None:
+                rate_line = (
+                    f"\n📊 <b>{'السعر الحالي' if lang == 'ar' else 'Live Rate'}:</b>  "
+                    f"1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+                )
+            else:
+                rate_line = (
+                    f"\n⚠️ <i>{'تعذّر جلب السعر الحالي.' if lang == 'ar' else 'Live rate unavailable right now.'}</i>"
+                )
+
+            if lang == "ar":
+                price_msg = (
+                    f"💱 <b>ما هو سعرك المطلوب؟</b>\n\n"
+                    f"أدخل كم <b>{currency}</b> تريد مقابل كل <b>100 {asset}</b>\n"
+                    f"✏️ مثال: اكتب <code>101</code> إذا كان سعرك <b>101 {currency}</b> لكل <b>100 {asset}</b>\n"
+                    f"{rate_line}"
+                    f"\n\nاكتب المبلغ وأرسله 👇"
+                )
+            else:
+                price_msg = (
+                    f"💱 <b>What's your offer rate?</b>\n\n"
+                    f"Enter how much <b>{currency}</b> per <b>100 {asset}</b>\n"
+                    f"✏️ Example: type <code>101</code> if your rate is <b>101 {currency}</b> per <b>100 {asset}</b>\n"
+                    f"{rate_line}"
+                    f"\n\nJust type the amount and send it 👇"
+                )
+
+            await callback.message.edit_text(price_msg, parse_mode="HTML", reply_markup=price_back_kb(lang))
+            await MarketFlow.price.set()
+        else:
+            # Confirmed — proceed to payment method
+            await callback.message.edit_text(t(lang, "select_payment"), reply_markup=payment_method_kb(lang))
+            await MarketFlow.payment.set()
+    except Exception as exc:
+        logger.error("cb_calc_confirm: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── PAYMENT METHOD ──
@@ -1335,20 +1442,45 @@ async def _finish_trade(lang: str, data: dict, user, send_to: str | None, reply_
     eur_snap  = row[13]
     rate_line = f"1 USD = {eur_snap:.4f} EUR" if eur_snap else "N/A"
 
-    summary = (
-        f"{t(lang, 'done_title')}\n\n"
-        f"🆔 <b>#{row[0]}</b>\n"
-        f"{'━' * 26}\n"
-        f"📌 {t(lang, 'type_lbl')}      : <b>{data['type'].upper()}</b>\n"
-        f"💱 {t(lang, 'asset_lbl')}     : <b>{data['asset']}</b>\n"
-        f"📦 {t(lang, 'amount_lbl')}    : <b>{data['amount']:,.2f}</b>\n"
-        f"💲 {t(lang, 'price_lbl')}     : <b>{data['price']:,.2f} {data['currency']}</b>\n"
-        f"💳 {t(lang, 'payment_lbl')}   : <b>{data.get('payment', '-')}</b>\n"
-        f"🚚 {t(lang, 'delivery_lbl')}  : <b>{data.get('delivery', '-')}</b>\n"
-        f"💰 {t(lang, 'total_lbl')}     : <b>{total:,.2f} {data['currency']}</b>\n"
-        f"📈 {t(lang, 'rate_lbl')}      : <b>{rate_line}</b>\n"
-        f"📅 {t(lang, 'date_lbl')}      : {row[15]}\n"
-    )
+    asset    = data.get("asset", "USDT")
+    currency = data.get("currency", "USD")
+    amount   = data.get("amount", 0)
+    price    = data.get("price", 0)
+
+    if lang == "ar":
+        summary = (
+            f"{t(lang, 'done_title')}\n\n"
+            f"🆔 <b>طلب رقم #{row[0]}</b>\n"
+            f"{'━' * 28}\n"
+            f"📌 <b>النوع:</b>              <b>{'شراء' if data['type']=='buy' else 'بيع'} {asset}</b>\n"
+            f"📦 <b>الكمية:</b>             <b>{amount:,.2f} {asset}</b>\n"
+            f"{'─' * 28}\n"
+            f"💱 <b>سعرك المطلوب:</b>       <b>{price:,.2f} {currency}</b> لكل 100 {asset}\n"
+            f"🧾 <b>الحساب:</b>             ({amount:,.2f} ÷ 100) × {price:,.2f}\n"
+            f"{'─' * 28}\n"
+            f"💰 <b>الإجمالي:</b>           <b>{total:,.2f} {currency}</b>\n"
+            f"{'━' * 28}\n"
+            f"💳 <b>طريقة الدفع:</b>        {data.get('payment', '-')}\n"
+            f"🚚 <b>طريقة الاستلام:</b>     {data.get('delivery', '-')}\n"
+            f"📅 <b>التاريخ:</b>            {row[15]}\n"
+        )
+    else:
+        summary = (
+            f"{t(lang, 'done_title')}\n\n"
+            f"🆔 <b>Order #{row[0]}</b>\n"
+            f"{'━' * 28}\n"
+            f"📌 <b>Type:</b>          <b>{'BUY' if data['type']=='buy' else 'SELL'} {asset}</b>\n"
+            f"📦 <b>Amount:</b>        <b>{amount:,.2f} {asset}</b>\n"
+            f"{'─' * 28}\n"
+            f"💱 <b>Your Rate:</b>     <b>{price:,.2f} {currency}</b> per 100 {asset}\n"
+            f"🧾 <b>Calculation:</b>   ({amount:,.2f} ÷ 100) × {price:,.2f}\n"
+            f"{'─' * 28}\n"
+            f"💰 <b>Total:</b>         <b>{total:,.2f} {currency}</b>\n"
+            f"{'━' * 28}\n"
+            f"💳 <b>Payment via:</b>   {data.get('payment', '-')}\n"
+            f"🚚 <b>Delivery via:</b>  {data.get('delivery', '-')}\n"
+            f"📅 <b>Date:</b>          {row[15]}\n"
+        )
 
     if hasattr(reply_target, 'message'):
         await reply_target.message.edit_text(summary, reply_markup=back_kb(lang), parse_mode="HTML")
@@ -1461,24 +1593,8 @@ async def cb_show_rates(callback: types.CallbackQuery, state: FSMContext):
     try:
         data = await state.get_data()
         lang = data.get("language", "ar")
-
-        # Show a loading message while fetching
-        loading = "⏳ جارٍ تحميل الأسعار..." if lang == "ar" else "⏳ Loading rates..."
-        await callback.answer(loading)
-
-        rates = get_sptoday_rates()
-        text  = format_rates_message(rates, lang)
-
-        # Back button returns to the type-selection menu
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton(t(lang, "btn_back"), callback_data="go_start")
-        )
-        await callback.message.edit_text(
-            text,
-            reply_markup=kb,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
+        await show_rates_menu(callback.message, lang, edit=True)
+        await callback.answer()
     except Exception as exc:
         logger.error("cb_show_rates: %s", exc)
 
@@ -1527,26 +1643,28 @@ async def cb_back_to_price(callback: types.CallbackQuery, state: FSMContext):
         currency = data.get("currency", "USD")
 
         live_rate, rate_source = fetch_crypto_reference(asset, currency)
-        asset_label    = "100 EUR" if currency == "EUR" else "100 USD"
-        asset_label_ar = "100 يورو" if currency == "EUR" else "100 دولار"
-        cur_symbol     = "€" if currency == "EUR" else "$"
+        cur_symbol = "€" if currency == "EUR" else "$"
 
         if live_rate is not None:
-            rate_line_en = f"\n\n📊 <b>Live Rate:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
-            rate_line_ar = f"\n\n📊 <b>السعر الحالي:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+            rate_line_en = f"\n📊 <b>Live Rate:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+            rate_line_ar = f"\n📊 <b>السعر الحالي:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
         else:
-            rate_line_en = "\n\n⚠️ <i>Live rate unavailable right now.</i>"
-            rate_line_ar = "\n\n⚠️ <i>تعذّر جلب السعر الحالي في الوقت الفعلي.</i>"
+            rate_line_en = "\n⚠️ <i>Live rate unavailable right now.</i>"
+            rate_line_ar = "\n⚠️ <i>تعذّر جلب السعر الحالي في الوقت الفعلي.</i>"
 
         if lang == "ar":
             price_msg = (
-                f"💲 <b>ما هو السعر الذي تبحث عنه لكل {asset_label_ar}؟</b>"
+                f"💱 <b>ما هو سعرك المطلوب؟</b>\n\n"
+                f"أدخل كم <b>{currency}</b> تريد مقابل كل <b>100 {asset}</b>\n"
+                f"✏️ مثال: اكتب <code>101</code> إذا كان سعرك <b>101 {currency}</b> لكل <b>100 {asset}</b>\n"
                 f"{rate_line_ar}"
                 f"\n\nاكتب المبلغ وأرسله 👇"
             )
         else:
             price_msg = (
-                f"💲 <b>What's your target price per {asset_label}?</b>"
+                f"💱 <b>What's your offer rate?</b>\n\n"
+                f"Enter how much <b>{currency}</b> per <b>100 {asset}</b>\n"
+                f"✏️ Example: type <code>101</code> if your rate is <b>101 {currency}</b> per <b>100 {asset}</b>\n"
                 f"{rate_line_en}"
                 f"\n\nJust type the amount and send it 👇"
             )
