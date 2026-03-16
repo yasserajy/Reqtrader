@@ -235,6 +235,34 @@ def get_sptoday_rates() -> list:
                 "day_low":      city.get("day_low", 0),
             })
 
+        # Fetch extra currencies not in the overview (e.g. SEK)
+        extra_currencies = ["SEK"]
+        for code in extra_currencies:
+            try:
+                r2 = requests.get(
+                    f"https://api-v2.sp-today.com/api/v1/currency/{code}?city=damascus",
+                    headers=headers, timeout=10
+                )
+                d = r2.json()
+                item = d["data"]["currency"]
+                city = item.get("cities", {}).get("damascus", {})
+                if city:
+                    result.append({
+                        "code":         item.get("code", code),
+                        "name_ar":      item.get("name_ar", item.get("name", code)),
+                        "flag":         item.get("flag", "🏳️"),
+                        "buy":          city.get("buy", 0),
+                        "sell":         city.get("sell", 0),
+                        "change_day":   city.get("change", 0),
+                        "change_week":  city.get("change_week", 0),
+                        "change_month": city.get("change_month", 0),
+                        "change_year":  city.get("change_year", 0),
+                        "day_high":     city.get("day_high", 0),
+                        "day_low":      city.get("day_low", 0),
+                    })
+            except Exception as e:
+                logger.warning("Could not fetch extra currency %s: %s", code, e)
+
         logger.info("sp-today API: fetched %d currency rates", len(result))
         return result
 
@@ -384,16 +412,27 @@ def format_rates_message(rates: list, lang: str) -> str:
         high_l   = "High"
         low_l    = "Low"
 
+    # Custom base denomination per currency (default 100, SEK uses 1000)
+    BASE_DENOM = {"SEK": 1000}
+
+    # Desired order: USD, EUR, SEK first, then the rest
+    ORDER = ["USD", "EUR", "SEK"]
+    ordered = sorted(rates, key=lambda r: (
+        ORDER.index(r["code"]) if r["code"] in ORDER else len(ORDER) + 1
+    ))
+
     lines = [title, ""]
 
-    for r in rates:
+    for r in ordered:
         flag         = r["flag"]
         code         = r["code"]
         name_display = r["name_ar"] if lang == "ar" else code
-        buy          = f"{r['buy']:,}"
-        sell         = f"{r['sell']:,}"
-        high         = f"{r['day_high']:,}"
-        low          = f"{r['day_low']:,}"
+        denom        = BASE_DENOM.get(code, 100)
+        multiplier   = denom / 100  # scale buy/sell/high/low
+        buy          = f"{int(r['buy'] * multiplier):,}"
+        sell         = f"{int(r['sell'] * multiplier):,}"
+        high         = f"{int(r['day_high'] * multiplier):,}"
+        low          = f"{int(r['day_low'] * multiplier):,}"
         chg_day      = r["change_day"]
         chg_week     = r["change_week"]
         chg_month    = r["change_month"]
@@ -406,7 +445,7 @@ def format_rates_message(rates: list, lang: str) -> str:
             day_badge = f"📉 {chg_day:.2f}%"
         else:
             day_badge = "➖ —"
-        lines.append(f"┌ {flag} <b>{code}</b>  {name_display}  <code>100</code>  {day_badge}")
+        lines.append(f"┌ {flag} <b>{code}</b>  {name_display}  <code>{denom}</code>  {day_badge}")
         lines.append(f"│  💰 <b>{buy_l}:</b>  <code>{buy}</code>   <b>{sell_l}:</b>  <code>{sell}</code>")
         lines.append(f"│  📊 <b>{high_l}:</b> <code>{high}</code>   <b>{low_l}:</b> <code>{low}</code>")
         lines.append(f"└  {_fmt_change(chg_week, 'أسبوعي', 'Week', lang)}")
