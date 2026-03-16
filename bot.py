@@ -571,7 +571,7 @@ TX = {
         "custom_amount"   : "✏️ <b>أدخل المبلغ:</b>",
         "other_amount"    : "✍️ <b>أدخل المبلغ الذي تريده:</b>\n\nاكتب الرقم وأرسله 👇",
         "select_pay_cur"  : "🌍 <b>ما هي عملة الدفع؟</b>\n\nاختر العملة التي ستدفع بها 👇",
-        "enter_price"     : "💲 <b>ما هو السعر المطلوب لكل وحدة؟</b>\n\nأدخل السعر يدوياً 👇",
+        "enter_price"     : "💲 <b>ما هو السعر الذي تبحث عنه لكل 100 دولار؟</b>\n\nاكتب المبلغ وأرسله 👇",
         "select_payment"  : "💳 <b>كيف تريد الدفع؟</b>\n\nاختر طريقة الدفع المناسبة لك 👇",
         "select_delivery" : "🚚 <b>كيف تريد استلام مبلغك؟</b>\n\nاختر طريقة الاستلام 👇",
         "enter_email"     : "📧 <b>هل تريد إرسال تأكيد على بريدك الإلكتروني؟</b>\n\nأدخل بريدك الإلكتروني أو اضغط <b>تخطي</b> إذا لم تكن بحاجة لذلك.",
@@ -620,7 +620,7 @@ TX = {
         "custom_amount"   : "✏️ <b>Enter the amount:</b>",
         "other_amount"    : "✍️ <b>Enter your desired amount:</b>\n\nType the number and send it 👇",
         "select_pay_cur"  : "🌍 <b>Which currency will you pay with?</b>\n\nSelect your payment currency below 👇",
-        "enter_price"     : "💲 <b>What price per unit are you looking for?</b>\n\nEnter the price manually 👇",
+        "enter_price"     : "💲 <b>What's your target price per 100 USD?</b>\n\nJust type the amount and send it 👇",
         "select_payment"  : "💳 <b>How would you like to pay?</b>\n\nChoose your preferred payment method 👇",
         "select_delivery" : "🚚 <b>How would you like to receive your funds?</b>\n\nChoose a delivery method below 👇",
         "enter_email"     : "📧 <b>Would you like a confirmation sent to your email?</b>\n\nEnter your email address or tap <b>Skip</b> if you'd rather not.",
@@ -691,13 +691,17 @@ def sell_asset_kb(lang: str) -> InlineKeyboardMarkup:
     kb.add(_back_btn(lang))
     return kb
 
+def _back_to_asset_btn(lang: str) -> InlineKeyboardButton:
+    label = "◀️ رجوع" if lang == "ar" else "◀️ Back"
+    return InlineKeyboardButton(label, callback_data="back_to_asset")
+
 def amount_kb(lang: str, asset: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=3)
     if asset in ("USD", "EUR", "USDT", "USDC"):
         kb.add(*[InlineKeyboardButton(str(a), callback_data=f"amt_{a}") for a in QUICK_AMOUNTS])
         other_label = "✏️ أخرى" if lang == "ar" else "✏️ Other"
         kb.add(InlineKeyboardButton(other_label, callback_data="amt_other"))
-    kb.add(_back_btn(lang))
+    kb.add(_back_to_asset_btn(lang))
     return kb
 
 def pay_cur_kb(lang: str) -> InlineKeyboardMarkup:
@@ -983,9 +987,10 @@ async def cb_amount_quick(callback: types.CallbackQuery, state: FSMContext):
 
         if raw == "other":
             # Ask user to type a custom amount
+            kb = InlineKeyboardMarkup().add(_back_to_asset_btn(lang))
             await callback.message.edit_text(
                 t(lang, "other_amount"),
-                reply_markup=back_kb(lang),
+                reply_markup=kb,
                 parse_mode="HTML"
             )
             # Stay in MarketFlow.amount state so msg_amount picks it up
@@ -1031,7 +1036,36 @@ async def cb_currency(callback: types.CallbackQuery, state: FSMContext):
         lang     = data.get("language", "en")
         currency = callback.data.split("_", 1)[1]
         await state.update_data(currency=currency)
-        await callback.message.edit_text(t(lang, "enter_price"), reply_markup=back_kb(lang))
+        asset = data.get("asset", "USDT")
+
+        # Fetch live rate (CoinGecko → CryptoCompare fallback)
+        live_rate, rate_source = fetch_crypto_reference(asset, currency)
+
+        asset_label    = "100 EUR" if currency == "EUR" else "100 USD"
+        asset_label_ar = "100 يورو" if currency == "EUR" else "100 دولار"
+        cur_symbol     = "€" if currency == "EUR" else "$"
+
+        if live_rate is not None:
+            rate_line_en = f"\n\n📊 <b>Live Rate:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+            rate_line_ar = f"\n\n📊 <b>السعر الحالي:</b>  1 {asset} ≈ <b>{cur_symbol}{live_rate:.4f}</b>  <i>({rate_source})</i>"
+        else:
+            rate_line_en = "\n\n⚠️ <i>Live rate unavailable right now.</i>"
+            rate_line_ar = "\n\n⚠️ <i>تعذّر جلب السعر الحالي في الوقت الفعلي.</i>"
+
+        if lang == "ar":
+            price_msg = (
+                f"💲 <b>ما هو السعر الذي تبحث عنه لكل {asset_label_ar}؟</b>"
+                f"{rate_line_ar}"
+                f"\n\nاكتب المبلغ وأرسله 👇"
+            )
+        else:
+            price_msg = (
+                f"💲 <b>What's your target price per {asset_label}?</b>"
+                f"{rate_line_en}"
+                f"\n\nJust type the amount and send it 👇"
+            )
+
+        await callback.message.edit_text(price_msg, parse_mode="HTML", reply_markup=back_kb(lang))
         await MarketFlow.price.set()
     except Exception as exc:
         logger.error("cb_currency: %s", exc)
@@ -1174,6 +1208,40 @@ async def msg_email(message: types.Message, state: FSMContext):
         logger.error("msg_email: %s", exc)
 
 # ══════════════════════════════════════════════
+#  ── COINGECKO LIVE RATE HELPER ──
+# ══════════════════════════════════════════════
+def fetch_crypto_reference(asset: str, currency: str):
+    """
+    Fetches live crypto rate for the price entry screen reference.
+    Tries CoinGecko first, falls back to CryptoCompare if it fails.
+    asset: USDT or USDC  |  currency: USD or EUR
+    Returns (price: float, source: str) or (None, None) on total failure.
+    """
+    # ── Source 1: CoinGecko ──
+    try:
+        coin_id = "tether" if asset == "USDT" else "usd-coin"
+        vs = currency.lower()
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies={vs}"
+        resp = requests.get(url, timeout=6)
+        resp.raise_for_status()
+        price = resp.json()[coin_id][vs]
+        return price, "CoinGecko"
+    except Exception:
+        pass
+
+    # ── Source 2: CryptoCompare (fallback) ──
+    try:
+        url = f"https://min-api.cryptocompare.com/data/price?fsym={asset}&tsyms={currency}"
+        resp = requests.get(url, timeout=6)
+        resp.raise_for_status()
+        price = resp.json()[currency]
+        return price, "CryptoCompare"
+    except Exception:
+        pass
+
+    return None, None
+
+# ══════════════════════════════════════════════
 #  ── EXCHANGE RATES (sp-today.com) ──
 # ══════════════════════════════════════════════
 @dp.callback_query_handler(lambda c: c.data == "show_gold", state="*")
@@ -1221,6 +1289,27 @@ async def cb_show_rates(callback: types.CallbackQuery, state: FSMContext):
 
 
 # ══════════════════════════════════════════════
+#  ── BACK TO ASSET SELECTION ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(lambda c: c.data == "back_to_asset", state="*")
+async def cb_back_to_asset(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        data       = await state.get_data()
+        lang       = data.get("language", "en")
+        trade_type = data.get("type", "buy")
+        asset_key_map = {
+            "buy":  "select_asset_b",
+            "sell": "select_asset_sl",
+        }
+        asset_key = asset_key_map.get(trade_type, "select_asset_b")
+        kb = sell_asset_kb(lang)
+        await callback.message.edit_text(t(lang, asset_key), reply_markup=kb)
+        await MarketFlow.asset.set()
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_back_to_asset: %s", exc)
+
+# ══════════════════════════════════════════════
 #  ── BACK TO START ──
 # ══════════════════════════════════════════════
 @dp.callback_query_handler(lambda c: c.data in ("go_start", "back_to_main"), state="*")
@@ -1235,6 +1324,16 @@ async def cb_go_start(callback: types.CallbackQuery, state: FSMContext):
 # ══════════════════════════════════════════════
 #  ── UNKNOWN COMMANDS ──
 # ══════════════════════════════════════════════
+@dp.message_handler(state=None)
+async def catchall_no_state(message: types.Message, state: FSMContext):
+    """Show welcome screen whenever user sends anything without an active flow."""
+    try:
+        await message.answer("👇", reply_markup=PERSISTENT_KB)
+        await show_welcome(message)
+        await MarketFlow.language.set()
+    except Exception as exc:
+        logger.error("catchall_no_state: %s", exc)
+
 @dp.message_handler(lambda m: m.text and m.text.startswith("/"))
 async def unknown_command(message: types.Message, state: FSMContext):
     try:
