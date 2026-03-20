@@ -1057,6 +1057,9 @@ PERSISTENT_KB = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2).add(
 class PortfolioStates(StatesGroup):
     entering_quantity = State()
 
+class AdminTokenSearch(StatesGroup):
+    waiting_query = State()
+
 
 @dp.message_handler(commands=["start"], state="*")
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -2631,6 +2634,7 @@ def _trk_tokens_list_kb(tokens: list, is_admin: bool) -> InlineKeyboardMarkup:
     buttons.append([InlineKeyboardButton(text="📥 Export to Excel", callback_data="trk:export")])
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙️ Manage Tokens", callback_data="trk:admin")])
+    buttons.append([InlineKeyboardButton(text="❌ Close", callback_data="trk:close")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -2685,7 +2689,10 @@ def _trk_admin_tokens_kb(tokens: list) -> InlineKeyboardMarkup:
             text=f"{status} {tok['symbol']}  ({tok['id']})",
             callback_data=f"trk:admin_toggle:{tok['id']}"
         )])
-    buttons.append([InlineKeyboardButton(text="➕ Add Token", callback_data="trk:admin_add_popular")])
+    buttons.append([
+        InlineKeyboardButton(text="📋 Popular Tokens", callback_data="trk:admin_add_popular"),
+        InlineKeyboardButton(text="🔍 Search Token",   callback_data="trk:admin_search"),
+    ])
     buttons.append([InlineKeyboardButton(text="◀️ Back",      callback_data="trk:list")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -2711,6 +2718,40 @@ def _trk_cancel_kb(back_cb: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Cancel", callback_data=back_cb)]
     ])
+
+
+def _trk_search_results_kb(results: list, existing_ids: set) -> InlineKeyboardMarkup:
+    """Keyboard showing CoinGecko search results for admin to pick from."""
+    buttons = []
+    for coin in results[:10]:
+        cid = coin.get("id", "")
+        sym = coin.get("symbol", "").upper()
+        name = coin.get("name", "")
+        if cid in existing_ids:
+            label = f"✅ {sym} – {name}"
+            cb_data = f"trk:search_already:{cid}"
+        else:
+            label = f"➕ {sym} – {name}"
+            cb_data = f"trk:admin_add:{cid}:{sym}"
+        buttons.append([InlineKeyboardButton(text=label[:60], callback_data=cb_data)])
+    buttons.append([InlineKeyboardButton(text="🔍 Search Again", callback_data="trk:admin_search")])
+    buttons.append([InlineKeyboardButton(text="◀️ Back",        callback_data="trk:admin")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _trk_coingecko_search(query: str) -> list:
+    """Search CoinGecko for coins matching query. Returns list of {id, symbol, name}."""
+    try:
+        url = f"{COINGECKO_BASE}/search?query={query}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+                return data.get("coins", [])
+    except Exception as exc:
+        logger.error("CoinGecko search error: %s", exc)
+        return []
 
 
 # ── Excel Export ──────────────────────────────────────────────────
@@ -2849,8 +2890,12 @@ async def cmd_tracker(message: types.Message):
         tokens   = await asyncio.to_thread(_trk_get_enabled_tokens)
         is_admin = message.from_user.id == ADMIN_ID
         if not tokens:
+            if is_admin:
+                msg = "📊 *Crypto Tracker*\n\n⚠️ No tokens added yet.\nTap ⚙️ Manage Tokens to add some."
+            else:
+                msg = "📊 *Crypto Tracker*\n\n⚠️ No tokens available yet.\nPlease check back later."
             await message.answer(
-                "📊 *Crypto Tracker*\n\nNo tokens configured yet.",
+                msg,
                 parse_mode="Markdown",
                 reply_markup=_trk_tokens_list_kb([], is_admin)
             )
@@ -3112,6 +3157,65 @@ async def cb_admin_add_token(cb: types.CallbackQuery):
     )
 
 
+async def cb_admin_search_prompt(cb: types.CallbackQuery, state: FSMContext):
+    """Admin taps 🔍 Search Token — ask them to type a coin name or symbol."""
+    if cb.from_user.id != ADMIN_ID:
+        await cb.answer("⛔ Admin only.", show_alert=True)
+        return
+    await AdminTokenSearch.waiting_query.set()
+    await cb.message.edit_text(
+        "🔍 *Search for a Token*\n\n"
+        "Type the coin name or ticker symbol:\n"
+        "_(e.g.  `pepe`, `sei`, `injective`, `wif`)_",
+        parse_mode="Markdown",
+        reply_markup=_trk_cancel_kb("trk:admin")
+    )
+    await cb.answer()
+
+
+async def on_admin_token_search(message: types.Message, state: FSMContext):
+    """Admin typed a search query — search CoinGecko and display results."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    query = message.text.strip()
+    if not query:
+        await message.answer("❗ Please type a token name or symbol.")
+        return
+    await state.finish()
+    searching_msg = await message.answer(f"🔍 Searching for *{query}*…", parse_mode="Markdown")
+    results = await _trk_coingecko_search(query)
+    if not results:
+        await searching_msg.edit_text(
+            f"❌ No results found for *{query}*.\nTry a different name or symbol.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 Search Again", callback_data="trk:admin_search")],
+                [InlineKeyboardButton(text="◀️ Back",         callback_data="trk:admin")],
+            ])
+        )
+        return
+    all_tokens   = await asyncio.to_thread(_trk_get_all_tokens)
+    existing_ids = {t["id"] for t in all_tokens}
+    await searching_msg.edit_text(
+        f"🔍 Results for *{query}* — tap to add:",
+        parse_mode="Markdown",
+        reply_markup=_trk_search_results_kb(results, existing_ids)
+    )
+
+
+async def cb_search_already(cb: types.CallbackQuery):
+    """Admin tapped an already-added token in search results."""
+    await cb.answer("✅ This token is already in your list!", show_alert=True)
+
+
+async def cb_trk_close(cb: types.CallbackQuery):
+    """Delete the crypto tracker message when admin/user taps ❌ Close."""
+    try:
+        await cb.message.delete()
+    except Exception:
+        await cb.answer("Closed.")
+
+
 async def cb_trk_export(cb: types.CallbackQuery):
     await cb.answer("📥 Preparing Excel file...")
     await cb.message.edit_text("⏳ Fetching latest prices for all tokens, please wait...")
@@ -3242,6 +3346,25 @@ if __name__ == "__main__":
         cb_trk_export,
         lambda c: c.data == "trk:export",
         state="*"
+    )
+    dp.register_callback_query_handler(
+        cb_trk_close,
+        lambda c: c.data == "trk:close",
+        state="*"
+    )
+    dp.register_callback_query_handler(
+        cb_admin_search_prompt,
+        lambda c: c.data == "trk:admin_search",
+        state="*"
+    )
+    dp.register_callback_query_handler(
+        cb_search_already,
+        lambda c: c.data.startswith("trk:search_already:"),
+        state="*"
+    )
+    dp.register_message_handler(
+        on_admin_token_search,
+        state=AdminTokenSearch.waiting_query
     )
     executor.start_polling(
         dp,
