@@ -2907,6 +2907,10 @@ async def cmd_tracker(message: types.Message):
         )
     except Exception as exc:
         logger.error("cmd_tracker: %s", exc)
+        try:
+            await message.answer(f"❌ Error loading Crypto Tracker: {exc}")
+        except Exception:
+            pass
 
 
 async def cb_trk_list(cb: types.CallbackQuery):
@@ -3287,7 +3291,7 @@ if __name__ == "__main__":
     logger.info("Transfer Bot v4.1 (with Crypto Tracker) starting…")
 
     # ── Register Crypto Tracker handlers ─────────────────────────
-    dp.register_message_handler(cmd_tracker, commands=["tracker"])
+    dp.register_message_handler(cmd_tracker, commands=["tracker"], state="*")
     dp.register_message_handler(
         handle_portfolio_qty,
         state=PortfolioStates.entering_quantity
