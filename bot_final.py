@@ -221,6 +221,17 @@ def init_db() -> None:
                 lang     TEXT DEFAULT 'en'
             )
         """)
+        tconn.execute("""
+            CREATE TABLE IF NOT EXISTS user_access (
+                user_id     INTEGER PRIMARY KEY,
+                username    TEXT,
+                first_name  TEXT,
+                status      TEXT DEFAULT 'pending',
+                lang        TEXT DEFAULT 'en',
+                requested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                approved_at  TEXT
+            )
+        """)
         tconn.commit()
 
 def save_user_lang(user_id: int, lang: str) -> None:
@@ -239,6 +250,80 @@ def get_user_lang(user_id: int) -> str:
             "SELECT lang FROM user_lang WHERE user_id = ?", (user_id,)
         ).fetchone()
     return row[0] if row else None
+
+
+def get_user_status(user_id: int) -> str | None:
+    """Return 'pending', 'approved', 'rejected', or None if not found."""
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        row = conn.execute(
+            "SELECT status FROM user_access WHERE user_id=?", (user_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def create_user_request(user_id: int, username: str, first_name: str, lang: str) -> None:
+    """Insert a new pending user request. Ignored if already exists."""
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO user_access (user_id, username, first_name, status, lang, requested_at)
+               VALUES (?, ?, ?, 'pending', ?, CURRENT_TIMESTAMP)""",
+            (user_id, username or "", first_name or "", lang)
+        )
+        conn.commit()
+
+
+def set_user_access_status(user_id: int, status: str) -> None:
+    """Set user status to 'approved' or 'rejected'."""
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        if status == "approved":
+            conn.execute(
+                "UPDATE user_access SET status=?, approved_at=CURRENT_TIMESTAMP WHERE user_id=?",
+                (status, user_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE user_access SET status=? WHERE user_id=?",
+                (status, user_id)
+            )
+        conn.commit()
+
+
+def get_users_by_status(status: str) -> list:
+    """Return list of (user_id, username, first_name, requested_at) for given status."""
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        return conn.execute(
+            "SELECT user_id, username, first_name, requested_at FROM user_access WHERE status=? ORDER BY requested_at",
+            (status,)
+        ).fetchall()
+
+
+def revoke_user_access(user_id: int) -> None:
+    """Revoke an approved user back to pending."""
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        conn.execute("UPDATE user_access SET status='pending', approved_at=NULL WHERE user_id=?", (user_id,))
+        conn.commit()
+
+
+async def _check_access(uid: int, lang: str, target) -> bool:
+    """Return True if user is allowed. Send denial message and return False otherwise."""
+    if uid == ADMIN_ID:
+        return True
+    status = await asyncio.to_thread(get_user_status, uid)
+    if status == "approved":
+        return True
+    eff_lang = lang or "en"
+    if status == "pending":
+        msg = "⏳ <b>طلبك قيد المراجعة.</b>" if eff_lang == "ar" else "⏳ <b>Your request is pending admin approval.</b>"
+    elif status == "rejected":
+        msg = "❌ <b>تم رفض طلبك.</b>" if eff_lang == "ar" else "❌ <b>Your access request was denied.</b>"
+    else:
+        msg = "⏳ <b>يرجى إرسال /start لطلب الوصول.</b>" if eff_lang == "ar" else "⏳ <b>Please send /start to request access.</b>"
+    if isinstance(target, types.CallbackQuery):
+        await target.answer(msg.replace("<b>","").replace("</b>",""), show_alert=True)
+    else:
+        await target.answer(msg, parse_mode="HTML")
+    return False
+
 
 def get_enabled_currencies() -> list:
     with sqlite3.connect(DATABASE_PATH) as conn:
@@ -1074,6 +1159,8 @@ def admin_kb(settings: list) -> InlineKeyboardMarkup:
             icon  = "✅" if enabled else "🔴"
             label = _SECTION_LABELS.get(item, item)
             kb.add(InlineKeyboardButton(f"{icon}  {label}", callback_data=f"toggle_{item}"))
+    kb.add(InlineKeyboardButton("━━━ 👥 Users ━━━", callback_data="adm_noop"))
+    kb.add(InlineKeyboardButton("👥 Manage Users", callback_data="adm_users"))
     return kb
 
 # ══════════════════════════════════════════════
@@ -1126,16 +1213,105 @@ class AdminTokenSearch(StatesGroup):
     waiting_query = State()
 
 
+async def _notify_admin_new_user(user: types.User, lang: str) -> None:
+    """Send admin a notification about a new user request with approve/reject buttons."""
+    try:
+        name = user.full_name or user.first_name or "Unknown"
+        username_str = f"@{user.username}" if user.username else "no username"
+        text = (
+            f"🔔 <b>New user request</b>\n\n"
+            f"👤 Name: <b>{name}</b>\n"
+            f"🆔 ID: <code>{user.id}</code>\n"
+            f"📛 Username: {username_str}\n"
+            f"🌐 Language: {'🇸🇦 Arabic' if lang == 'ar' else '🇬🇧 English'}"
+        )
+        kb = InlineKeyboardMarkup(row_width=2).add(
+            InlineKeyboardButton("✅ Approve", callback_data=f"usr_approve_{user.id}"),
+            InlineKeyboardButton("❌ Reject",  callback_data=f"usr_reject_{user.id}"),
+        )
+        await bot.send_message(ADMIN_ID, text, reply_markup=kb, parse_mode="HTML")
+    except Exception as exc:
+        logger.error("_notify_admin_new_user: %s", exc)
+
+
 @dp.message_handler(commands=["start"], state="*")
 async def cmd_start(message: types.Message, state: FSMContext):
     try:
         await state.finish()
-        await message.answer("👇", reply_markup=PERSISTENT_KB)
-        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
-        if lang:
-            await show_main_menu(message, lang)
+        uid = message.from_user.id
+
+        # Admin always bypasses approval
+        if uid == ADMIN_ID:
+            await message.answer("👇", reply_markup=PERSISTENT_KB)
+            lang = await asyncio.to_thread(get_user_lang, uid)
+            if lang:
+                await show_main_menu(message, lang)
+            else:
+                await ask_language(message, state, pending_section=None)
+            return
+
+        status = await asyncio.to_thread(get_user_status, uid)
+        lang   = await asyncio.to_thread(get_user_lang, uid)
+
+        if status == "approved":
+            await message.answer("👇", reply_markup=PERSISTENT_KB)
+            if lang:
+                await show_main_menu(message, lang)
+            else:
+                await ask_language(message, state, pending_section=None)
+
+        elif status == "pending":
+            eff_lang = lang or "en"
+            if eff_lang == "ar":
+                await message.answer(
+                    "⏳ <b>طلبك قيد المراجعة</b>\n\nسيتم إشعارك فور موافقة المشرف.",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "⏳ <b>Your request is pending</b>\n\nYou'll be notified as soon as the admin approves you.",
+                    parse_mode="HTML"
+                )
+
+        elif status == "rejected":
+            eff_lang = lang or "en"
+            if eff_lang == "ar":
+                await message.answer(
+                    "❌ <b>تم رفض طلبك</b>\n\nللاستفسار، تواصل مع الدعم.",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "❌ <b>Your access request was denied.</b>\n\nPlease contact support for help.",
+                    parse_mode="HTML"
+                )
+
         else:
-            await ask_language(message, state, pending_section=None)
+            # New user — no record yet
+            if lang:
+                # Lang already saved from a previous session; create request and notify
+                await asyncio.to_thread(
+                    create_user_request,
+                    uid,
+                    message.from_user.username or "",
+                    message.from_user.first_name or "",
+                    lang
+                )
+                await _notify_admin_new_user(message.from_user, lang)
+                if lang == "ar":
+                    await message.answer(
+                        "⏳ <b>تم إرسال طلبك إلى المشرف</b>\n\nسيتم إشعارك فور الموافقة.",
+                        parse_mode="HTML"
+                    )
+                else:
+                    await message.answer(
+                        "⏳ <b>Your request has been sent to the admin.</b>\n\nYou'll be notified once approved.",
+                        parse_mode="HTML"
+                    )
+            else:
+                # Ask language first — after picking, cb_language will create request
+                await ask_language(message, state, pending_section="__new_user__")
+
     except Exception as exc:
         logger.error("cmd_start: %s", exc)
 
@@ -1177,10 +1353,13 @@ async def show_rates_menu(target, lang: str, edit: bool = False):
 @dp.message_handler(commands=["rates"], state="*")
 async def cmd_rates(message: types.Message, state: FSMContext):
     try:
+        uid = message.from_user.id
+        lang = await asyncio.to_thread(get_user_lang, uid)
+        if not await _check_access(uid, lang, message):
+            return
         if not await asyncio.to_thread(is_section_enabled, "section_rates"):
             await message.answer(SECTION_CLOSED_MSG["section_rates"])
             return
-        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
         if not lang:
             await ask_language(message, state, pending_section="rates")
@@ -1270,10 +1449,13 @@ async def cb_back_to_rates_menu(callback: types.CallbackQuery, state: FSMContext
 @dp.message_handler(commands=["gold"], state="*")
 async def cmd_gold(message: types.Message, state: FSMContext):
     try:
+        uid = message.from_user.id
+        lang = await asyncio.to_thread(get_user_lang, uid)
+        if not await _check_access(uid, lang, message):
+            return
         if not await asyncio.to_thread(is_section_enabled, "section_gold"):
             await message.answer(SECTION_CLOSED_MSG["section_gold"])
             return
-        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
         if not lang:
             await ask_language(message, state, pending_section="gold")
@@ -1379,10 +1561,13 @@ async def cmd_about(message: types.Message, state: FSMContext):
 async def kb_buy_direct(message: types.Message, state: FSMContext):
     """Buy keyboard button."""
     try:
+        uid = message.from_user.id
+        lang = await asyncio.to_thread(get_user_lang, uid)
+        if not await _check_access(uid, lang, message):
+            return
         if not await asyncio.to_thread(is_section_enabled, "section_buy"):
             await message.answer(SECTION_CLOSED_MSG["section_buy"])
             return
-        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
         if not lang:
             await state.update_data(preset_type="buy")
@@ -1398,10 +1583,13 @@ async def kb_buy_direct(message: types.Message, state: FSMContext):
 async def kb_sell_direct(message: types.Message, state: FSMContext):
     """Sell keyboard button."""
     try:
+        uid = message.from_user.id
+        lang = await asyncio.to_thread(get_user_lang, uid)
+        if not await _check_access(uid, lang, message):
+            return
         if not await asyncio.to_thread(is_section_enabled, "section_sell"):
             await message.answer(SECTION_CLOSED_MSG["section_sell"])
             return
-        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
         if not lang:
             await state.update_data(preset_type="sell")
@@ -1415,6 +1603,10 @@ async def kb_sell_direct(message: types.Message, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text in ["🥇 الذهب / Gold"], state="*")
 async def kb_gold(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    lang = await asyncio.to_thread(get_user_lang, uid)
+    if not await _check_access(uid, lang, message):
+        return
     if not await asyncio.to_thread(is_section_enabled, "section_gold"):
         await message.answer(SECTION_CLOSED_MSG["section_gold"])
         return
@@ -1423,10 +1615,13 @@ async def kb_gold(message: types.Message, state: FSMContext):
 @dp.message_handler(lambda m: m.text == "📊 Crypto Tracker / متتبع", state="*")
 async def kb_crypto_tracker(message: types.Message, state: FSMContext):
     """Handle Crypto Tracker keyboard button press."""
+    uid = message.from_user.id
+    lang = await asyncio.to_thread(get_user_lang, uid)
+    if not await _check_access(uid, lang, message):
+        return
     if not await asyncio.to_thread(is_section_enabled, "section_crypto"):
         await message.answer(SECTION_CLOSED_MSG["section_crypto"])
         return
-    lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
     if not lang:
         await state.finish()
         await ask_language(message, state, pending_section="tracker")
@@ -1435,6 +1630,10 @@ async def kb_crypto_tracker(message: types.Message, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text in ["💹 الأسعار / Rates"], state="*")
 async def kb_rates(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
+    lang = await asyncio.to_thread(get_user_lang, uid)
+    if not await _check_access(uid, lang, message):
+        return
     if not await asyncio.to_thread(is_section_enabled, "section_rates"):
         await message.answer(SECTION_CLOSED_MSG["section_rates"])
         return
@@ -1490,6 +1689,151 @@ async def cmd_admin(message: types.Message):
 @dp.callback_query_handler(lambda c: c.data == "adm_noop", state="*")
 async def cb_adm_noop(callback: types.CallbackQuery):
     await callback.answer()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("usr_approve_") or c.data.startswith("usr_reject_"), state="*")
+async def cb_user_approval(callback: types.CallbackQuery):
+    try:
+        if callback.from_user.id != ADMIN_ID:
+            await callback.answer("🚫 Unauthorised", show_alert=True)
+            return
+        parts  = callback.data.split("_")
+        action = parts[1]   # "approve" or "reject"
+        uid    = int(parts[2])
+
+        if action == "approve":
+            await asyncio.to_thread(set_user_access_status, uid, "approved")
+            lang = await asyncio.to_thread(get_user_lang, uid) or "en"
+            if lang == "ar":
+                msg_to_user = "✅ <b>تمت الموافقة على طلبك!</b>\n\nاضغط /start للبدء."
+            else:
+                msg_to_user = "✅ <b>Your access has been approved!</b>\n\nSend /start to begin."
+            try:
+                await bot.send_message(uid, msg_to_user, parse_mode="HTML")
+            except Exception:
+                pass
+            await callback.message.edit_text(
+                callback.message.text + "\n\n✅ <b>Approved</b>",
+                parse_mode="HTML"
+            )
+            await callback.answer("✅ User approved", show_alert=True)
+
+        else:  # reject
+            await asyncio.to_thread(set_user_access_status, uid, "rejected")
+            lang = await asyncio.to_thread(get_user_lang, uid) or "en"
+            if lang == "ar":
+                msg_to_user = "❌ <b>تم رفض طلبك.</b>\n\nللاستفسار، تواصل مع الدعم."
+            else:
+                msg_to_user = "❌ <b>Your access request was denied.</b>\n\nPlease contact support."
+            try:
+                await bot.send_message(uid, msg_to_user, parse_mode="HTML")
+            except Exception:
+                pass
+            await callback.message.edit_text(
+                callback.message.text + "\n\n❌ <b>Rejected</b>",
+                parse_mode="HTML"
+            )
+            await callback.answer("❌ User rejected", show_alert=True)
+
+    except Exception as exc:
+        logger.error("cb_user_approval: %s", exc)
+
+
+@dp.callback_query_handler(lambda c: c.data == "adm_users", state="*")
+async def cb_adm_users(callback: types.CallbackQuery):
+    try:
+        if callback.from_user.id != ADMIN_ID:
+            await callback.answer("🚫", show_alert=True)
+            return
+        pending  = await asyncio.to_thread(get_users_by_status, "pending")
+        approved = await asyncio.to_thread(get_users_by_status, "approved")
+
+        kb = InlineKeyboardMarkup(row_width=1)
+
+        if pending:
+            kb.add(InlineKeyboardButton("━━━ ⏳ Pending ━━━", callback_data="adm_noop"))
+            for uid, uname, fname, req_at in pending:
+                label = f"👤 {fname or uname or uid}  (@{uname})" if uname else f"👤 {fname or uid}"
+                kb.add(
+                    InlineKeyboardButton(f"✅ Approve: {label}", callback_data=f"usr_approve_{uid}"),
+                    InlineKeyboardButton(f"❌ Reject:  {label}", callback_data=f"usr_reject_{uid}"),
+                )
+
+        if approved:
+            kb.add(InlineKeyboardButton("━━━ ✅ Approved ━━━", callback_data="adm_noop"))
+            for uid, uname, fname, req_at in approved:
+                label = f"{fname or uname or uid}"
+                kb.add(InlineKeyboardButton(f"🚫 Revoke: {label}", callback_data=f"usr_revoke_{uid}"))
+
+        kb.add(InlineKeyboardButton("◀️ Back", callback_data="adm_back"))
+
+        total_pending  = len(pending)
+        total_approved = len(approved)
+        text = (
+            f"👥 <b>User Management</b>\n\n"
+            f"⏳ Pending: <b>{total_pending}</b>\n"
+            f"✅ Approved: <b>{total_approved}</b>"
+        )
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_adm_users: %s", exc)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("usr_revoke_"), state="*")
+async def cb_user_revoke(callback: types.CallbackQuery):
+    try:
+        if callback.from_user.id != ADMIN_ID:
+            await callback.answer("🚫", show_alert=True)
+            return
+        uid = int(callback.data.split("_")[2])
+        await asyncio.to_thread(revoke_user_access, uid)
+        lang = await asyncio.to_thread(get_user_lang, uid) or "en"
+        try:
+            msg = "🔒 <b>تم تعليق وصولك.</b>" if lang == "ar" else "🔒 <b>Your access has been revoked.</b>"
+            await bot.send_message(uid, msg, parse_mode="HTML")
+        except Exception:
+            pass
+        await callback.answer("🚫 Access revoked", show_alert=True)
+        # Refresh the users list
+        pending  = await asyncio.to_thread(get_users_by_status, "pending")
+        approved = await asyncio.to_thread(get_users_by_status, "approved")
+        kb = InlineKeyboardMarkup(row_width=1)
+        if pending:
+            kb.add(InlineKeyboardButton("━━━ ⏳ Pending ━━━", callback_data="adm_noop"))
+            for u_id, uname, fname, req_at in pending:
+                label = f"👤 {fname or uname or u_id}"
+                kb.add(
+                    InlineKeyboardButton(f"✅ Approve: {label}", callback_data=f"usr_approve_{u_id}"),
+                    InlineKeyboardButton(f"❌ Reject:  {label}", callback_data=f"usr_reject_{u_id}"),
+                )
+        if approved:
+            kb.add(InlineKeyboardButton("━━━ ✅ Approved ━━━", callback_data="adm_noop"))
+            for u_id, uname, fname, req_at in approved:
+                label = f"{fname or uname or u_id}"
+                kb.add(InlineKeyboardButton(f"🚫 Revoke: {label}", callback_data=f"usr_revoke_{u_id}"))
+        kb.add(InlineKeyboardButton("◀️ Back", callback_data="adm_back"))
+        await callback.message.edit_reply_markup(reply_markup=kb)
+    except Exception as exc:
+        logger.error("cb_user_revoke: %s", exc)
+
+
+@dp.callback_query_handler(lambda c: c.data == "adm_back", state="*")
+async def cb_adm_back(callback: types.CallbackQuery):
+    try:
+        if callback.from_user.id != ADMIN_ID:
+            await callback.answer("🚫", show_alert=True)
+            return
+        settings = get_all_settings()
+        await callback.message.edit_text(
+            "⚙️ <b>Admin Panel</b>\nTap a currency to toggle it on/off:",
+            reply_markup=admin_kb(settings),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    except Exception as exc:
+        logger.error("cb_adm_back: %s", exc)
+
 
 @dp.callback_query_handler(lambda c: c.data.startswith("toggle_"), state="*")
 async def cb_toggle(callback: types.CallbackQuery):
@@ -1580,6 +1924,36 @@ async def cb_language(callback: types.CallbackQuery, state: FSMContext):
             )
 
         else:
+            # If this is a new user (no access record), create pending request
+            uid = callback.from_user.id
+            if uid != ADMIN_ID:
+                status = await asyncio.to_thread(get_user_status, uid)
+                if status is None:
+                    await asyncio.to_thread(
+                        create_user_request, uid,
+                        callback.from_user.username or "",
+                        callback.from_user.first_name or "",
+                        lang
+                    )
+                    await _notify_admin_new_user(callback.from_user, lang)
+                    if lang == "ar":
+                        await callback.message.edit_text(
+                            "⏳ <b>تم إرسال طلبك إلى المشرف</b>\n\nسيتم إشعارك فور الموافقة.",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        await callback.message.edit_text(
+                            "⏳ <b>Your request has been sent to the admin.</b>\n\nYou'll be notified once approved.",
+                            parse_mode="HTML"
+                        )
+                    return
+                elif status in ("pending", "rejected"):
+                    if lang == "ar":
+                        msg = "⏳ <b>طلبك قيد المراجعة</b>\n\nسيتم إشعارك فور الموافقة." if status == "pending" else "❌ <b>تم رفض طلبك.</b>"
+                    else:
+                        msg = "⏳ <b>Your request is pending review.</b>\n\nYou'll be notified once approved." if status == "pending" else "❌ <b>Your access request was denied.</b>"
+                    await callback.message.edit_text(msg, parse_mode="HTML")
+                    return
             # Default: show main menu
             await show_main_menu(callback.message, lang, edit=True)
 
@@ -1600,6 +1974,10 @@ async def cb_main_section(callback: types.CallbackQuery, state: FSMContext):
         data    = await state.get_data()
         lang    = data.get("language") or await asyncio.to_thread(get_user_lang, user_id)
         section = callback.data
+
+        if section != "change_lang" and not await _check_access(user_id, lang, callback):
+            return
+
         await callback.answer()
 
         if section == "change_lang":
@@ -2331,10 +2709,13 @@ async def catchall_no_state(message: types.Message, state: FSMContext):
 async def cmd_buy(message: types.Message, state: FSMContext):
     """Handle /buy command."""
     try:
+        uid = message.from_user.id
+        lang = await asyncio.to_thread(get_user_lang, uid)
+        if not await _check_access(uid, lang, message):
+            return
         if not await asyncio.to_thread(is_section_enabled, "section_buy"):
             await message.answer(SECTION_CLOSED_MSG["section_buy"])
             return
-        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
         if not lang:
             await state.update_data(preset_type="buy")
@@ -2350,10 +2731,13 @@ async def cmd_buy(message: types.Message, state: FSMContext):
 async def cmd_sell(message: types.Message, state: FSMContext):
     """Handle /sell command."""
     try:
+        uid = message.from_user.id
+        lang = await asyncio.to_thread(get_user_lang, uid)
+        if not await _check_access(uid, lang, message):
+            return
         if not await asyncio.to_thread(is_section_enabled, "section_sell"):
             await message.answer(SECTION_CLOSED_MSG["section_sell"])
             return
-        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
         if not lang:
             await state.update_data(preset_type="sell")
