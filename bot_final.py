@@ -238,7 +238,7 @@ def get_user_lang(user_id: int) -> str:
         row = conn.execute(
             "SELECT lang FROM user_lang WHERE user_id = ?", (user_id,)
         ).fetchone()
-    return row[0] if row else "en"
+    return row[0] if row else None
 
 def get_enabled_currencies() -> list:
     with sqlite3.connect(DATABASE_PATH) as conn:
@@ -910,6 +910,60 @@ def lang_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
     )
 
+def main_menu_kb(lang: str) -> InlineKeyboardMarkup:
+    """Full main menu with all sections as inline buttons."""
+    if lang == "ar":
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            InlineKeyboardButton("🛒 شراء",          callback_data="main_buy"),
+            InlineKeyboardButton("💸 بيع",            callback_data="main_sell"),
+        )
+        kb.add(
+            InlineKeyboardButton("💹 أسعار الصرف",    callback_data="main_rates"),
+            InlineKeyboardButton("🥇 أسعار الذهب",    callback_data="main_gold"),
+        )
+        kb.add(
+            InlineKeyboardButton("📊 متتبع العملات",  callback_data="main_tracker"),
+        )
+        kb.add(
+            InlineKeyboardButton("🌐 تغيير اللغة",   callback_data="change_lang"),
+        )
+    else:
+        kb = InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            InlineKeyboardButton("🛒 Buy",            callback_data="main_buy"),
+            InlineKeyboardButton("💸 Sell",           callback_data="main_sell"),
+        )
+        kb.add(
+            InlineKeyboardButton("💹 Exchange Rates", callback_data="main_rates"),
+            InlineKeyboardButton("🥇 Gold Prices",    callback_data="main_gold"),
+        )
+        kb.add(
+            InlineKeyboardButton("📊 Crypto Tracker", callback_data="main_tracker"),
+        )
+        kb.add(
+            InlineKeyboardButton("🌐 Change Language", callback_data="change_lang"),
+        )
+    return kb
+
+async def show_main_menu(target, lang: str, edit: bool = False) -> None:
+    """Show the full main menu in the user's chosen language."""
+    if lang == "ar":
+        text = (
+            "🏠 <b>القائمة الرئيسية</b>\n\n"
+            "اختر القسم الذي تريد الاطلاع عليه 👇"
+        )
+    else:
+        text = (
+            "🏠 <b>Main Menu</b>\n\n"
+            "Select a section to get started 👇"
+        )
+    kb = main_menu_kb(lang)
+    if edit:
+        await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
 def type_kb(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -1041,6 +1095,17 @@ async def show_welcome(target, edit: bool = False) -> None:
     else:
         await target.answer(WELCOME_TEXT, reply_markup=lang_kb())
 
+async def ask_language(target, state: FSMContext, pending_section: str = None) -> None:
+    """Show language selection. Stores pending_section so cb_language can route after."""
+    await state.update_data(pending_section=pending_section)
+    await MarketFlow.language.set()
+    text = "🌐 اختر لغتك / Choose your language:"
+    kb = InlineKeyboardMarkup(row_width=2).add(
+        InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
+        InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+    )
+    await target.answer(text, reply_markup=kb)
+
 # ══════════════════════════════════════════════
 #  ── /start ──
 # ══════════════════════════════════════════════
@@ -1051,7 +1116,7 @@ PERSISTENT_KB = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2).add(
     KeyboardButton("💸 Sell / بيع"),
     KeyboardButton("💹 الأسعار / Rates"),
     KeyboardButton("🥇 الذهب / Gold"),
-    KeyboardButton("📊 Crypto Tracker"),
+    KeyboardButton("📊 Crypto Tracker / متتبع"),
 )
 
 class PortfolioStates(StatesGroup):
@@ -1066,8 +1131,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
     try:
         await state.finish()
         await message.answer("👇", reply_markup=PERSISTENT_KB)
-        await show_welcome(message)
-        await MarketFlow.language.set()
+        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
+        if lang:
+            await show_main_menu(message, lang)
+        else:
+            await ask_language(message, state, pending_section=None)
     except Exception as exc:
         logger.error("cmd_start: %s", exc)
 
@@ -1112,8 +1180,12 @@ async def cmd_rates(message: types.Message, state: FSMContext):
         if not await asyncio.to_thread(is_section_enabled, "section_rates"):
             await message.answer(SECTION_CLOSED_MSG["section_rates"])
             return
-        data = await state.get_data()
-        lang = data.get("language", "ar")
+        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
+        await state.finish()
+        if not lang:
+            await ask_language(message, state, pending_section="rates")
+            return
+        await state.update_data(language=lang)
         await show_rates_menu(message, lang, edit=False)
     except Exception as exc:
         logger.error("cmd_rates: %s", exc)
@@ -1201,8 +1273,12 @@ async def cmd_gold(message: types.Message, state: FSMContext):
         if not await asyncio.to_thread(is_section_enabled, "section_gold"):
             await message.answer(SECTION_CLOSED_MSG["section_gold"])
             return
-        data = await state.get_data()
-        lang = data.get("language", "ar")
+        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
+        await state.finish()
+        if not lang:
+            await ask_language(message, state, pending_section="gold")
+            return
+        await state.update_data(language=lang)
         loading = "⏳ جارٍ تحميل أسعار الذهب..." if lang == "ar" else "⏳ Loading gold prices..."
         msg = await message.answer(loading)
         gold = await asyncio.to_thread(get_gold_rates)
@@ -1301,37 +1377,39 @@ async def cmd_about(message: types.Message, state: FSMContext):
 # ── Persistent keyboard button handlers ──
 @dp.message_handler(lambda m: m.text == "🛒 Buy / شراء", state="*")
 async def kb_buy_direct(message: types.Message, state: FSMContext):
-    """Buy button — ask language then jump straight to asset selection."""
+    """Buy keyboard button."""
     try:
         if not await asyncio.to_thread(is_section_enabled, "section_buy"):
             await message.answer(SECTION_CLOSED_MSG["section_buy"])
             return
+        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
-        await state.update_data(preset_type="buy")
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("🇸🇦 العربية", callback_data="dlang_ar"),
-            InlineKeyboardButton("🇬🇧 English", callback_data="dlang_en"),
-        )
-        await message.answer("🛒 اختر اللغة / Choose language:", reply_markup=kb)
-        await MarketFlow.language.set()
+        if not lang:
+            await state.update_data(preset_type="buy")
+            await ask_language(message, state, pending_section="buy")
+            return
+        await state.update_data(language=lang, type="buy", preset_type="buy")
+        await message.answer(t(lang, "select_asset_b"), reply_markup=asset_kb(lang))
+        await MarketFlow.asset.set()
     except Exception as exc:
         logger.error("kb_buy_direct: %s", exc)
 
 @dp.message_handler(lambda m: m.text == "💸 Sell / بيع", state="*")
 async def kb_sell_direct(message: types.Message, state: FSMContext):
-    """Sell button — ask language then jump straight to asset selection."""
+    """Sell keyboard button."""
     try:
         if not await asyncio.to_thread(is_section_enabled, "section_sell"):
             await message.answer(SECTION_CLOSED_MSG["section_sell"])
             return
+        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
         await state.finish()
-        await state.update_data(preset_type="sell")
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("🇸🇦 العربية", callback_data="dlang_ar"),
-            InlineKeyboardButton("🇬🇧 English", callback_data="dlang_en"),
-        )
-        await message.answer("💸 اختر اللغة / Choose language:", reply_markup=kb)
-        await MarketFlow.language.set()
+        if not lang:
+            await state.update_data(preset_type="sell")
+            await ask_language(message, state, pending_section="sell")
+            return
+        await state.update_data(language=lang, type="sell", preset_type="sell")
+        await message.answer(t(lang, "select_asset_sl"), reply_markup=sell_asset_kb(lang))
+        await MarketFlow.asset.set()
     except Exception as exc:
         logger.error("kb_sell_direct: %s", exc)
 
@@ -1342,11 +1420,16 @@ async def kb_gold(message: types.Message, state: FSMContext):
         return
     await cmd_gold(message, state)
 
-@dp.message_handler(lambda m: m.text == "📊 Crypto Tracker", state="*")
+@dp.message_handler(lambda m: m.text == "📊 Crypto Tracker / متتبع", state="*")
 async def kb_crypto_tracker(message: types.Message, state: FSMContext):
     """Handle Crypto Tracker keyboard button press."""
     if not await asyncio.to_thread(is_section_enabled, "section_crypto"):
         await message.answer(SECTION_CLOSED_MSG["section_crypto"])
+        return
+    lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
+    if not lang:
+        await state.finish()
+        await ask_language(message, state, pending_section="tracker")
         return
     await cmd_tracker(message)
 
@@ -1427,38 +1510,174 @@ async def cb_toggle(callback: types.CallbackQuery):
 # ══════════════════════════════════════════════
 #  ── LANGUAGE ──
 # ══════════════════════════════════════════════
-@dp.callback_query_handler(lambda c: c.data.startswith("dlang_"), state=MarketFlow.language)
-async def cb_direct_language(callback: types.CallbackQuery, state: FSMContext):
-    """Language selection from direct Buy/Sell buttons — skips type step."""
-    try:
-        lang = callback.data.split("_", 1)[1]
-        await state.update_data(language=lang)
-        await asyncio.to_thread(save_user_lang, callback.from_user.id, lang)
-        data = await state.get_data()
-        trade_type = data.get("preset_type", "buy")
-        await state.update_data(type=trade_type)
-
-        if trade_type == "buy":
-            await callback.message.edit_text(t(lang, "select_asset_b"), reply_markup=asset_kb(lang))
-        else:
-            await callback.message.edit_text(t(lang, "select_asset_sl"), reply_markup=sell_asset_kb(lang))
-
-        await callback.answer()
-        await MarketFlow.asset.set()
-    except Exception as exc:
-        logger.error("cb_direct_language: %s", exc)
-
 @dp.callback_query_handler(lambda c: c.data.startswith("lang_"), state=MarketFlow.language)
 async def cb_language(callback: types.CallbackQuery, state: FSMContext):
+    """Handle language selection — save to DB and route to pending section."""
     try:
         lang = callback.data.split("_", 1)[1]
-        await state.update_data(language=lang)
+        data = await state.get_data()
+        pending = data.get("pending_section")
         await asyncio.to_thread(save_user_lang, callback.from_user.id, lang)
-        await callback.message.edit_text(t(lang, "select_type"), reply_markup=type_kb(lang))
+        await state.finish()
+        await state.update_data(language=lang)
         await callback.answer()
-        await MarketFlow.type.set()
+
+        if pending == "buy":
+            if not await asyncio.to_thread(is_section_enabled, "section_buy"):
+                await callback.message.edit_text(SECTION_CLOSED_MSG["section_buy"])
+                return
+            await state.update_data(language=lang, type="buy", preset_type="buy")
+            await callback.message.edit_text(t(lang, "select_asset_b"), reply_markup=asset_kb(lang))
+            await MarketFlow.asset.set()
+
+        elif pending == "sell":
+            if not await asyncio.to_thread(is_section_enabled, "section_sell"):
+                await callback.message.edit_text(SECTION_CLOSED_MSG["section_sell"])
+                return
+            await state.update_data(language=lang, type="sell", preset_type="sell")
+            await callback.message.edit_text(t(lang, "select_asset_sl"), reply_markup=sell_asset_kb(lang))
+            await MarketFlow.asset.set()
+
+        elif pending == "rates":
+            if not await asyncio.to_thread(is_section_enabled, "section_rates"):
+                await callback.message.edit_text(SECTION_CLOSED_MSG["section_rates"])
+                return
+            await state.update_data(language=lang)
+            await show_rates_menu(callback.message, lang, edit=True)
+
+        elif pending == "gold":
+            if not await asyncio.to_thread(is_section_enabled, "section_gold"):
+                await callback.message.edit_text(SECTION_CLOSED_MSG["section_gold"])
+                return
+            await state.update_data(language=lang)
+            loading = "⏳ جارٍ تحميل أسعار الذهب..." if lang == "ar" else "⏳ Loading gold prices..."
+            await callback.message.edit_text(loading)
+            gold = await asyncio.to_thread(get_gold_rates)
+            text = format_gold_message(gold, lang)
+            kb = InlineKeyboardMarkup(row_width=2)
+            kb.add(InlineKeyboardButton("🔄 تحديث / Refresh", callback_data="refresh_gold"))
+            kb.add(InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main"))
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
+        elif pending == "tracker":
+            if not await asyncio.to_thread(is_section_enabled, "section_crypto"):
+                await callback.message.edit_text(SECTION_CLOSED_MSG["section_crypto"])
+                return
+            user_id = callback.from_user.id
+            tokens = await asyncio.to_thread(get_tracked_tokens)
+            if not tokens:
+                msg = "📊 لا توجد عملات مضافة بعد." if lang == "ar" else "📊 No tokens added yet. Check back later!"
+                kb  = InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
+                )
+                await callback.message.edit_text(msg, reply_markup=kb)
+                return
+            kb = _trk_tokens_list_kb(tokens, user_id)
+            await callback.message.edit_text(
+                "📊 *Crypto Tracker*\n\nSelect a token to view details:",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+
+        else:
+            # Default: show main menu
+            await show_main_menu(callback.message, lang, edit=True)
+
     except Exception as exc:
         logger.error("cb_language: %s", exc)
+
+# ══════════════════════════════════════════════
+#  ── MAIN MENU SECTION CALLBACKS ──
+# ══════════════════════════════════════════════
+@dp.callback_query_handler(
+    lambda c: c.data in ("main_buy", "main_sell", "main_rates", "main_gold", "main_tracker", "change_lang"),
+    state="*"
+)
+async def cb_main_section(callback: types.CallbackQuery, state: FSMContext):
+    """Handle section selection from the main menu."""
+    try:
+        user_id = callback.from_user.id
+        data    = await state.get_data()
+        lang    = data.get("language") or await asyncio.to_thread(get_user_lang, user_id)
+        section = callback.data
+        await callback.answer()
+
+        if section == "change_lang":
+            await state.finish()
+            await state.update_data(pending_section=None)
+            await MarketFlow.language.set()
+            text = "🌐 اختر لغتك / Choose your language:"
+            kb = InlineKeyboardMarkup(row_width=2).add(
+                InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
+                InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+            )
+            await callback.message.edit_text(text, reply_markup=kb)
+            return
+
+        if section == "main_buy":
+            if not await asyncio.to_thread(is_section_enabled, "section_buy"):
+                await callback.message.answer(SECTION_CLOSED_MSG["section_buy"])
+                return
+            await state.finish()
+            await state.update_data(language=lang, type="buy", preset_type="buy")
+            await callback.message.edit_text(t(lang, "select_asset_b"), reply_markup=asset_kb(lang))
+            await MarketFlow.asset.set()
+
+        elif section == "main_sell":
+            if not await asyncio.to_thread(is_section_enabled, "section_sell"):
+                await callback.message.answer(SECTION_CLOSED_MSG["section_sell"])
+                return
+            await state.finish()
+            await state.update_data(language=lang, type="sell", preset_type="sell")
+            await callback.message.edit_text(t(lang, "select_asset_sl"), reply_markup=sell_asset_kb(lang))
+            await MarketFlow.asset.set()
+
+        elif section == "main_rates":
+            if not await asyncio.to_thread(is_section_enabled, "section_rates"):
+                await callback.message.answer(SECTION_CLOSED_MSG["section_rates"])
+                return
+            await state.finish()
+            await state.update_data(language=lang)
+            await show_rates_menu(callback.message, lang, edit=True)
+
+        elif section == "main_gold":
+            if not await asyncio.to_thread(is_section_enabled, "section_gold"):
+                await callback.message.answer(SECTION_CLOSED_MSG["section_gold"])
+                return
+            await state.finish()
+            await state.update_data(language=lang)
+            loading = "⏳ جارٍ تحميل أسعار الذهب..." if lang == "ar" else "⏳ Loading gold prices..."
+            await callback.message.edit_text(loading)
+            gold = await asyncio.to_thread(get_gold_rates)
+            text = format_gold_message(gold, lang)
+            kb   = InlineKeyboardMarkup(row_width=2)
+            kb.add(InlineKeyboardButton("🔄 تحديث / Refresh", callback_data="refresh_gold"))
+            kb.add(InlineKeyboardButton("🏠 القائمة / Menu",  callback_data="back_to_main"))
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
+        elif section == "main_tracker":
+            if not await asyncio.to_thread(is_section_enabled, "section_crypto"):
+                await callback.message.answer(SECTION_CLOSED_MSG["section_crypto"])
+                return
+            await state.finish()
+            await state.update_data(language=lang)
+            tokens = await asyncio.to_thread(get_tracked_tokens)
+            if not tokens:
+                msg = "📊 لا توجد عملات مضافة بعد." if lang == "ar" else "📊 No tokens added yet. Check back later!"
+                kb  = InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("🏠 القائمة / Menu", callback_data="back_to_main")
+                )
+                await callback.message.edit_text(msg, reply_markup=kb)
+                return
+            kb = _trk_tokens_list_kb(tokens, user_id)
+            await callback.message.edit_text(
+                "📊 *Crypto Tracker*\n\nSelect a token to view details:",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+
+    except Exception as exc:
+        logger.error("cb_main_section: %s", exc)
 
 # ══════════════════════════════════════════════
 #  ── TYPE  (Buy / Sell) ──
@@ -2087,9 +2306,10 @@ async def cb_back_to_asset(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data in ("go_start", "back_to_main"), state="*")
 async def cb_go_start(callback: types.CallbackQuery, state: FSMContext):
     try:
+        data = await state.get_data()
+        lang = data.get("language") or await asyncio.to_thread(get_user_lang, callback.from_user.id)
         await state.finish()
-        await show_welcome(callback.message, edit=True)
-        await MarketFlow.language.set()
+        await show_main_menu(callback.message, lang, edit=True)
         await callback.answer()
     except Exception as exc:
         logger.error("cb_go_start: %s", exc)
@@ -2097,7 +2317,7 @@ async def cb_go_start(callback: types.CallbackQuery, state: FSMContext):
 # ══════════════════════════════════════════════
 #  ── UNKNOWN COMMANDS ──
 # ══════════════════════════════════════════════
-@dp.message_handler(state=None)
+@dp.message_handler(lambda m: not (m.text and m.text.startswith("/")), state=None)
 async def catchall_no_state(message: types.Message, state: FSMContext):
     """Show welcome screen whenever user sends anything without an active flow."""
     try:
@@ -2107,7 +2327,50 @@ async def catchall_no_state(message: types.Message, state: FSMContext):
     except Exception as exc:
         logger.error("catchall_no_state: %s", exc)
 
-@dp.message_handler(lambda m: m.text and m.text.startswith("/"))
+@dp.message_handler(commands=["buy"], state="*")
+async def cmd_buy(message: types.Message, state: FSMContext):
+    """Handle /buy command."""
+    try:
+        if not await asyncio.to_thread(is_section_enabled, "section_buy"):
+            await message.answer(SECTION_CLOSED_MSG["section_buy"])
+            return
+        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
+        await state.finish()
+        if not lang:
+            await state.update_data(preset_type="buy")
+            await ask_language(message, state, pending_section="buy")
+            return
+        await state.update_data(language=lang, type="buy", preset_type="buy")
+        msg = await message.answer(t(lang, "select_asset_b"), reply_markup=asset_kb(lang))
+        await MarketFlow.asset.set()
+    except Exception as exc:
+        logger.error("cmd_buy: %s", exc)
+
+@dp.message_handler(commands=["sell"], state="*")
+async def cmd_sell(message: types.Message, state: FSMContext):
+    """Handle /sell command."""
+    try:
+        if not await asyncio.to_thread(is_section_enabled, "section_sell"):
+            await message.answer(SECTION_CLOSED_MSG["section_sell"])
+            return
+        lang = await asyncio.to_thread(get_user_lang, message.from_user.id)
+        await state.finish()
+        if not lang:
+            await state.update_data(preset_type="sell")
+            await ask_language(message, state, pending_section="sell")
+            return
+        await state.update_data(language=lang, type="sell", preset_type="sell")
+        await message.answer(t(lang, "select_asset_sl"), reply_markup=sell_asset_kb(lang))
+        await MarketFlow.asset.set()
+    except Exception as exc:
+        logger.error("cmd_sell: %s", exc)
+
+_KNOWN_COMMANDS = {"start", "rates", "gold", "help", "about", "stats", "admin", "tracker", "buy", "sell"}
+
+@dp.message_handler(
+    lambda m: m.text and m.text.startswith("/") and
+              m.text.lstrip("/").split("@")[0].split()[0].lower() not in _KNOWN_COMMANDS
+)
 async def unknown_command(message: types.Message, state: FSMContext):
     try:
         data = await state.get_data()
@@ -2634,7 +2897,7 @@ def _trk_tokens_list_kb(tokens: list, is_admin: bool) -> InlineKeyboardMarkup:
     buttons.append([InlineKeyboardButton(text="📥 Export to Excel", callback_data="trk:export")])
     if is_admin:
         buttons.append([InlineKeyboardButton(text="⚙️ Manage Tokens", callback_data="trk:admin")])
-    buttons.append([InlineKeyboardButton(text="❌ Close", callback_data="trk:close")])
+    buttons.append([InlineKeyboardButton(text="◀️ Back to Menu", callback_data="trk:close")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -3275,11 +3538,13 @@ async def on_startup(dispatcher):
     from aiogram.types import BotCommand, BotCommandScopeDefault
     commands = [
         BotCommand("start",  "🏠 القائمة الرئيسية / Main Menu"),
+        BotCommand("buy",    "🛒 شراء / Buy"),
+        BotCommand("sell",   "💸 بيع / Sell"),
         BotCommand("rates",  "💹 أسعار الصرف / Exchange Rates"),
         BotCommand("gold",   "🥇 أسعار الذهب / Gold Prices"),
+        BotCommand("tracker", "📊 Crypto Tracker / متتبع"),
         BotCommand("about",  "ℹ️ عن البوت / About"),
         BotCommand("help",    "❓ المساعدة / Help"),
-        BotCommand("tracker", "📊 Crypto Tracker"),
 
         BotCommand("stats",  "📊 الإحصائيات / Statistics (Admin)"),
         BotCommand("admin",  "⚙️ لوحة التحكم / Admin Panel"),
