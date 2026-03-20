@@ -1,6 +1,0 @@
-aiogram==2.25.1
-requests
-beautifulsoup4
-python-dotenv
-openpyxl
-openai
