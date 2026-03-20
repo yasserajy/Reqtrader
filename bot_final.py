@@ -996,13 +996,23 @@ _SECTION_LABELS = {
 
 def admin_kb(settings: list) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
-    # ── Sections group ─────────────────────────────────────
+    settings_dict = dict(settings)
+
+    # ── Sections group — same order as the keyboard ─────────
+    SECTION_ORDER = [
+        "section_buy",
+        "section_sell",
+        "section_rates",
+        "section_gold",
+        "section_crypto",
+    ]
     kb.add(InlineKeyboardButton("━━━ 📂 Sections ━━━", callback_data="adm_noop"))
-    for item, enabled in settings:
-        if item.startswith("section_"):
-            icon  = "✅" if enabled else "🔴"
-            label = _SECTION_LABELS.get(item, item)
-            kb.add(InlineKeyboardButton(f"{icon}  {label}", callback_data=f"toggle_{item}"))
+    for item in SECTION_ORDER:
+        enabled = settings_dict.get(item, 1)
+        icon  = "✅" if enabled else "🔴"
+        label = _SECTION_LABELS.get(item, item)
+        kb.add(InlineKeyboardButton(f"{icon}  {label}", callback_data=f"toggle_{item}"))
+
     # ── Currencies group ────────────────────────────────────
     kb.add(InlineKeyboardButton("━━━ 💰 Currencies ━━━", callback_data="adm_noop"))
     for item, enabled in settings:
