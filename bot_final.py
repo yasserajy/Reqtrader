@@ -2879,6 +2879,7 @@ def _trk_fetch_all_for_export(tokens: list) -> list:
 
 # ── Tracker Handlers (aiogram 2.x) ───────────────────────────────
 
+@dp.message_handler(commands=["tracker"], state="*")
 async def cmd_tracker(message: types.Message):
     """Show crypto tracker menu."""
     try:
@@ -3291,7 +3292,7 @@ if __name__ == "__main__":
     logger.info("Transfer Bot v4.1 (with Crypto Tracker) starting…")
 
     # ── Register Crypto Tracker handlers ─────────────────────────
-    dp.register_message_handler(cmd_tracker, commands=["tracker"], state="*")
+
     dp.register_message_handler(
         handle_portfolio_qty,
         state=PortfolioStates.entering_quantity
