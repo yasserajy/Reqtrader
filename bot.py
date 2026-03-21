@@ -1916,7 +1916,7 @@ async def cb_language(callback: types.CallbackQuery, state: FSMContext):
                 )
                 await callback.message.edit_text(msg, reply_markup=kb)
                 return
-            kb = _trk_tokens_list_kb(tokens, user_id)
+            kb = _trk_tokens_list_kb(tokens, user_id == ADMIN_ID)
             await callback.message.edit_text(
                 "📊 *Crypto Tracker*\n\nSelect a token to view details:",
                 reply_markup=kb,
@@ -2047,7 +2047,7 @@ async def cb_main_section(callback: types.CallbackQuery, state: FSMContext):
                 )
                 await callback.message.edit_text(msg, reply_markup=kb)
                 return
-            kb = _trk_tokens_list_kb(tokens, user_id)
+            kb = _trk_tokens_list_kb(tokens, user_id == ADMIN_ID)
             await callback.message.edit_text(
                 "📊 *Crypto Tracker*\n\nSelect a token to view details:",
                 reply_markup=kb,
@@ -2791,6 +2791,10 @@ signal.signal(signal.SIGINT,  _handle_signal)
 # ══════════════════════════════════════════════════════════════════
 
 # ── Tracker DB helpers ────────────────────────────────────────────
+
+# Alias used throughout the bot
+def get_tracked_tokens() -> list:
+    return _trk_get_enabled_tokens()
 
 def _trk_get_enabled_tokens() -> list:
     conn = sqlite3.connect(DATABASE_PATH)
