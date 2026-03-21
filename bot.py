@@ -328,9 +328,10 @@ async def _check_access(uid: int, lang: str, target) -> bool:
 def get_enabled_currencies() -> list:
     with sqlite3.connect(DATABASE_PATH) as conn:
         rows = conn.execute(
-            "SELECT item FROM settings WHERE enabled=1 AND item NOT LIKE 'section_%' ORDER BY item"
+            "SELECT item FROM settings WHERE enabled=1 ORDER BY item"
         ).fetchall()
-    return [r[0] for r in rows]
+    # Double safety: filter out ANY item that starts with "section_" or contains "section"
+    return [r[0] for r in rows if not r[0].lower().startswith("section")]
 
 def get_all_settings() -> list:
     with sqlite3.connect(DATABASE_PATH) as conn:
